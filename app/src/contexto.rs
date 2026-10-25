@@ -64,6 +64,16 @@ impl Contexto {
         activo.then(config::resolucion_pantalla)
     }
 
+    /// Calidad (QP/CRF) de las versiones de 30 fps (ajuste quality-30fps).
+    pub fn calidad_30(&self) -> i32 {
+        self.ajustes.int("quality-30fps")
+    }
+
+    /// Si al importar hay que crear también la versión de 30 fps, con qué calidad.
+    pub fn version_30_al_importar(&self) -> Option<i32> {
+        self.ajustes.boolean("create-30fps").then(|| self.calidad_30())
+    }
+
     pub fn aviso(&self, texto: &str) {
         self.avisos.add_toast(adw::Toast::new(texto));
     }

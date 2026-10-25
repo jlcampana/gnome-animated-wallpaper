@@ -411,7 +411,16 @@ export default class FondosAnimados extends Extension {
                 efecto.setLimites((area.x - m.x) * ex, (area.y - m.y) * ey,
                     area.width * ex, area.height * ey);
             };
-            fondo.content.connectObject('notify::rounded-clip-radius', () => clon.queue_redraw(), clon);
+            // El efecto pinta el clon fuera de pantalla y, con escalado fraccionario, a otra
+            // resolución: solo mientras haya esquinas que redondear (en Actividades). Los fondos
+            // de la animación de cambio de escritorio también pasan por aquí y, con el efecto
+            // siempre puesto, el vídeo daba un saltito al empezar y al acabar la animación.
+            const radio = () => {
+                efecto.enabled = fondo.content.rounded_clip_radius > 0;
+                clon.queue_redraw();
+            };
+            fondo.content.connectObject('notify::rounded-clip-radius', radio, clon);
+            radio();
             fondo.connectObject('notify::size', actualizar, clon);
             global.display.connectObject('workareas-changed', actualizar, clon);
             actualizar();

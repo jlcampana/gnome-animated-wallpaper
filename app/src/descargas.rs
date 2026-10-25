@@ -189,7 +189,7 @@ impl Descargas {
         estado: &gtk::Label,
     ) {
         let optimizar = self.ctx.optimizar_descargas();
-        let version_30 = self.ctx.ajustes.boolean("create-30fps");
+        let version_30 = self.ctx.version_30_al_importar();
         estado.set_label(match optimizar {
             Some(_) => "Adaptando el vídeo a la pantalla (puede tardar)…",
             None => "Preparando el vídeo (quitando audio, comprobando códec)…",
@@ -282,7 +282,7 @@ impl Descargas {
             glib::spawn_future_local(async move {
                 let biblioteca = yo.ctx.biblioteca();
                 let sin_audio = yo.ctx.ajustes.boolean("strip-audio");
-                let version_30 = yo.ctx.ajustes.boolean("create-30fps");
+                let version_30 = yo.ctx.version_30_al_importar();
                 estado.set_label("Importando…");
                 let r = gio::spawn_blocking(move || {
                     importar::importar(&ruta, &biblioteca, None, sin_audio, false, None, version_30)

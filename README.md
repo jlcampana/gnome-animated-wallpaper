@@ -117,6 +117,14 @@ esa versión. El menú ⋮ de cada fondo permite usar una u otra, y crear o borr
 menú principal tiene «Crear versiones de 30 fps de toda la biblioteca» (pide confirmación,
 enseña el avance y se puede cancelar entre vídeo y vídeo).
 
+Su calidad se elige en *Ajustes → Calidad de las versiones de 30 fps* (clave `quality-30fps`,
+el `-q` de `fondo-animado-convertir`): Alta (24), Normal (28, por defecto) o Ligera (32). Para
+un fondo no hace falta mucha: con x265, un 1440p de 60 fps a 20 Mbps queda a 30 fps en 2,2 Mbps
+con la Alta (VMAF 91), 1,2 con la Normal (87) y 0,7 con la Ligera (81). La calidad está en la
+escala de H.264/HEVC (0-51); para AV1 y VP9 por GPU, que cuantizan en 0-255, el script la pasa
+a (calidad + 8) × 4. «Rehacer la versión de 30 fps» (menú ⋮) la vuelve a crear con la calidad
+elegida.
+
 ### Hardware y formato recomendado
 
 `fondo-animado-convertir --capacidades` detecta qué decodifica la GPU (decodificadores de

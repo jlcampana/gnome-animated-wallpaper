@@ -142,8 +142,15 @@ pub fn capacidades(forzar: bool) -> Capacidades {
 }
 
 /// Convierte `origen` en `destino` en el formato recomendado; con `resolucion`, además la adapta
-/// (recortando), y con `fps`, cambia los fotogramas por segundo. Si falla, no deja `destino`.
-fn convertir(origen: &Path, destino: &Path, resolucion: Option<(i32, i32)>, fps: Option<u32>) -> Result<(), String> {
+/// (recortando), con `fps`, cambia los fotogramas por segundo, y con `calidad`, usa ese QP/CRF
+/// en vez del del script. Si falla, no deja `destino`.
+fn convertir(
+    origen: &Path,
+    destino: &Path,
+    resolucion: Option<(i32, i32)>,
+    fps: Option<u32>,
+    calidad: Option<i32>,
+) -> Result<(), String> {
     let mut c = Command::new(config::programa("fondo-animado-convertir"));
     if let Some((w, h)) = resolucion {
         c.args(["-r", &format!("{w}x{h}")]);
@@ -151,7 +158,14 @@ fn convertir(origen: &Path, destino: &Path, resolucion: Option<(i32, i32)>, fps:
     if let Some(f) = fps {
         c.args(["-f", &f.to_string()]);
     }
-    crate::depurar!("convertir {} → {} (resolución {resolucion:?}, fps {fps:?})", origen.display(), destino.display());
+    if let Some(q) = calidad {
+        c.args(["-q", &q.to_string()]);
+    }
+    crate::depurar!(
+        "convertir {} → {} (resolución {resolucion:?}, fps {fps:?}, calidad {calidad:?})",
+        origen.display(),
+        destino.display()
+    );
     let salida = c
         .arg(origen)
         .arg(destino)
@@ -168,7 +182,7 @@ fn convertir(origen: &Path, destino: &Path, resolucion: Option<(i32, i32)>, fps:
 /// adapta (recortando).
 pub fn optimizar(ruta: &Path, resolucion: Option<(i32, i32)>) -> Result<PathBuf, String> {
     let destino = ruta.with_extension("optimizando.mp4");
-    convertir(ruta, &destino, resolucion, None)?;
+    convertir(ruta, &destino, resolucion, None, None)?;
     let _ = std::fs::remove_file(ruta);
     let final_ = ruta.with_extension("mp4");
     std::fs::rename(&destino, &final_).map_err(|e| e.to_string())?;
@@ -181,15 +195,15 @@ pub fn mas_de_30_fps(fps: f64) -> bool {
     fps > 30.5
 }
 
-/// Crea la versión de 30 fps de un vídeo de la biblioteca (en la subcarpeta «30 fps»); el
-/// original no se toca.
-pub fn crear_version_30(original: &Path) -> Result<PathBuf, String> {
+/// Crea la versión de 30 fps de un vídeo de la biblioteca (en la subcarpeta «30 fps»), con la
+/// `calidad` dada (QP/CRF); el original no se toca.
+pub fn crear_version_30(original: &Path, calidad: i32) -> Result<PathBuf, String> {
     let final_ = config::ruta_version_30(original);
     if let Some(dir) = final_.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let destino = final_.with_extension("convirtiendo.mp4");
-    convertir(original, &destino, None, Some(30))?;
+    convertir(original, &destino, None, Some(30), Some(calidad))?;
     std::fs::rename(&destino, &final_).map_err(|e| e.to_string())?;
     Ok(final_)
 }
@@ -295,7 +309,7 @@ pub struct Resultado {
 
 /// Importa `origen` (vídeo, archivo comprimido o carpeta) a la biblioteca. `mover`: el origen
 /// es temporal (descarga) y se puede mover en vez de copiar. `version_30`: si el vídeo va a más
-/// de 30 fps, crear también su versión de 30.
+/// de 30 fps, crear también su versión de 30, con esa calidad.
 pub fn importar(
     origen: &Path,
     biblioteca: &Path,
@@ -303,10 +317,10 @@ pub fn importar(
     sin_audio: bool,
     mover: bool,
     optimizar_a: Option<(i32, i32)>,
-    version_30: bool,
+    version_30: Option<i32>,
 ) -> Result<Resultado, String> {
     crate::depurar!(
-        "importar {} (sin audio: {sin_audio}, optimizar: {optimizar_a:?}, versión de 30 fps: {version_30})",
+        "importar {} (sin audio: {sin_audio}, optimizar: {optimizar_a:?}, versión de 30 fps: {version_30:?})",
         origen.display()
     );
     std::fs::create_dir_all(biblioteca).map_err(|e| e.to_string())?;
@@ -391,8 +405,8 @@ pub fn importar(
             Err(e) => avisos.push(format!("no se pudo convertir: {e}")),
         }
     }
-    if version_30 && mas_de_30_fps(info.fps) {
-        match crear_version_30(&ruta) {
+    if let Some(calidad) = version_30.filter(|_| mas_de_30_fps(info.fps)) {
+        match crear_version_30(&ruta, calidad) {
             Ok(_) => avisos.push(format!("creada también la versión de 30 fps (el original va a {:.0})", info.fps)),
             Err(e) => avisos.push(format!("no se pudo crear la versión de 30 fps: {e}")),
         }
@@ -439,7 +453,7 @@ mod pruebas {
         assert!(info(&con_audio).unwrap().audio);
 
         let biblioteca = dir.join("biblioteca");
-        let res = importar(&con_audio, &biblioteca, Some(&primero.titulo), true, true, None, false).unwrap();
+        let res = importar(&con_audio, &biblioteca, Some(&primero.titulo), true, true, None, None).unwrap();
         println!("importado {} · {} · avisos {:?}", res.ruta.display(), res.info.resumen(), res.avisos);
         assert!(!res.info.audio);
         assert!(res.ruta.starts_with(&biblioteca));
@@ -459,7 +473,7 @@ mod pruebas {
             .unwrap();
         assert!(ok.success());
         let biblioteca = dir.join("biblioteca");
-        let r = importar(&video, &biblioteca, None, true, false, None, true).unwrap();
+        let r = importar(&video, &biblioteca, None, true, false, None, Some(28)).unwrap();
         println!("avisos {:?}", r.avisos);
         assert_eq!(r.info.fps.round(), 60.0);
         let v30 = config::ruta_version_30(&r.ruta);
@@ -490,12 +504,12 @@ mod pruebas {
         assert!(Command::new("7z").arg("a").arg(&zip).arg(&paquete).output().unwrap().status.success());
 
         let biblioteca = dir.join("biblioteca");
-        let r = importar(&zip, &biblioteca, None, true, false, None, false).unwrap();
+        let r = importar(&zip, &biblioteca, None, true, false, None, None).unwrap();
         assert_eq!(r.ruta.file_name().unwrap(), "mi-fondo-we.mp4");
 
         std::fs::write(paquete.join("project.json"), r#"{"title":"Escena","type":"scene","file":"scene.json"}"#).unwrap();
         std::fs::remove_file(paquete.join("fondo.mp4")).unwrap();
-        let e = importar(&paquete, &biblioteca, None, true, false, None, false).unwrap_err();
+        let e = importar(&paquete, &biblioteca, None, true, false, None, None).unwrap_err();
         assert!(e.contains("scene"), "{e}");
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -462,6 +462,7 @@ impl Biblioteca {
         accion("usar-original", Box::new(|yo, f| yo.usar(f.elegida(false))));
         accion("usar-30", Box::new(|yo, f| yo.usar(f.elegida(true))));
         accion("crear-30", Box::new(|yo, f| yo.crear_version_30(f)));
+        accion("rehacer-30", Box::new(|yo, f| yo.crear_versiones_30(f.original.iter().cloned().collect())));
         accion("borrar-30", Box::new(|yo, f| yo.borrar_version_30(f)));
         accion("convertir", Box::new(|yo, f| convertir::abrir(yo.ctx.clone(), f.principal())));
         accion("sin-audio", Box::new(|yo, f| yo.quitar_audio(f.rutas())));
@@ -639,7 +640,8 @@ impl Biblioteca {
                 }
                 aviso.set_title(&format!("Creando la versión de 30 fps {}/{total}: {}", n + 1, nombre(&original)));
                 let o = original.clone();
-                let r = gio::spawn_blocking(move || importar::crear_version_30(&o))
+                let calidad = yo.ctx.calidad_30();
+                let r = gio::spawn_blocking(move || importar::crear_version_30(&o, calidad))
                     .await
                     .unwrap_or_else(|_| Err("fallo interno".into()));
                 match r {
@@ -717,7 +719,11 @@ fn menu(fondo: &Fondo) -> gio::Menu {
     let versiones = gio::Menu::new();
     match (&fondo.original, &fondo.v30) {
         (Some(_), None) => versiones.append(Some("Crear versión de 30 fps"), Some("tarjeta.crear-30")),
-        (Some(_), Some(_)) => versiones.append(Some("Borrar la versión de 30 fps"), Some("tarjeta.borrar-30")),
+        (Some(_), Some(_)) => {
+            // Rehacer: con la calidad de Ajustes (crear_version_30 la sustituye al terminar).
+            versiones.append(Some("Rehacer la versión de 30 fps"), Some("tarjeta.rehacer-30"));
+            versiones.append(Some("Borrar la versión de 30 fps"), Some("tarjeta.borrar-30"));
+        }
         _ => {}
     }
     if versiones.n_items() > 0 {

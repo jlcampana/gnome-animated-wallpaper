@@ -61,6 +61,12 @@
       <summary>Crear también una versión de 30 fps de los vídeos que van más rápido al descargarlos o importarlos</summary>
       <description>Se guarda en la subcarpeta «30 fps» de la biblioteca, con el mismo nombre; el original se conserva.</description>
     </key>
+    <key name="quality-30fps" type="i">
+      <range min="14" max="45"/>
+      <default>28</default>
+      <summary>Calidad de las versiones de 30 fps (QP/CRF de fondo-animado-convertir -q)</summary>
+      <description>Menos es mejor calidad y más peso. 24: alta; 28: normal; 32: ligera.</description>
+    </key>
     <key name="preferred-version" type="s">
       <choices>
         <choice value="original"/>

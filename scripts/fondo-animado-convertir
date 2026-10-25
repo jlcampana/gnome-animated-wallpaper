@@ -14,7 +14,8 @@
 #   -c, --codec C          auto (por defecto: el recomendado para este equipo) | av1 | hevc
 #                          | vp9 | h264
 #       --cpu              codifica con la CPU aunque haya codificador en la GPU
-#   -q, --calidad N        QP/CRF: menos es mejor calidad y más peso (24 por defecto)
+#   -q, --calidad N        QP/CRF: menos es mejor calidad y más peso (24 por defecto). En la
+#                          escala de H.264/HEVC (0-51); los demás códecs usan su equivalente
 #       --progreso         imprime «DURACION <s>», «CODIFICADOR <x>» y el progreso de ffmpeg
 #
 #   fondo-animado-convertir --capacidades [--forzar]
@@ -25,7 +26,7 @@
 # solo decodifican, como la Radeon RX 6400), se usa la CPU.
 set -euo pipefail
 
-uso() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+uso() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 # ── Capacidades del equipo ───────────────────────────────────────────────────
 CACHE_CAP="${XDG_CACHE_HOME:-$HOME/.cache}/fondos-animados/capacidades"
@@ -173,11 +174,21 @@ fi
 
 codificar() {  # $1 = codificador de ffmpeg
     local enc=$1 entrada_hw=() final="" opciones=()
+    # AV1 y VP9 por GPU cuantizan en 0-255: la misma equivalencia que con SVT-AV1 (CRF = calidad
+    # + 8) y unas 4 unidades de índice por punto de CRF. 24 → 128, 28 → 144, 32 → 160.
+    local q255=$(((calidad + 8) * 4))
+    ((q255 > 255)) && q255=255
     case "$enc" in
+        av1_vaapi|vp9_vaapi)
+            # No tienen -qp (ffmpeg lo ignoraría y usaría su calidad por defecto, altísima).
+            entrada_hw=(-vaapi_device "$dispositivo")
+            final=",format=nv12,hwupload"
+            opciones=(-rc_mode CQP -global_quality "$q255") ;;
         *_vaapi)
             entrada_hw=(-vaapi_device "$dispositivo")
             final=",format=nv12,hwupload"
             opciones=(-rc_mode CQP -qp "$calidad") ;;
+        av1_nvenc) opciones=(-preset p5 -rc constqp -qp "$q255" -pix_fmt yuv420p) ;;
         *_nvenc) opciones=(-preset p5 -rc constqp -qp "$calidad" -pix_fmt yuv420p) ;;
         libx264) opciones=(-preset slow -crf "$calidad" -pix_fmt yuv420p) ;;
         libx265) opciones=(-preset medium -crf "$((calidad + 2))" -pix_fmt yuv420p

@@ -135,6 +135,22 @@ pub fn construir(ctx: &Rc<Contexto>) -> adw::PreferencesPage {
         .build();
     ajustes.bind("create-30fps", &version_30, "active").build();
     grupo_desc.add(&version_30);
+    // Calidades medidas con x265 en un 1440p de 60 fps pasado a 30: 24 → 2,2 Mbps (VMAF 91),
+    // 28 → 1,2 (87), 32 → 0,7 (81).
+    let calidades = [24, 28, 32];
+    let calidad_30 = adw::ComboRow::builder()
+        .title("Calidad de las versiones de 30 fps")
+        .subtitle("Para un fondo no hace falta tanta: menos calidad, menos disco y menos que decodificar")
+        .model(&gtk::StringList::new(&["Alta", "Normal", "Ligera"]))
+        .build();
+    calidad_30.set_selected(calidades.iter().position(|c| *c == ajustes.int("quality-30fps")).unwrap_or(1) as u32);
+    {
+        let ajustes = ajustes.clone();
+        calidad_30.connect_selected_notify(move |c| {
+            let _ = ajustes.set_int("quality-30fps", calidades[c.selected() as usize]);
+        });
+    }
+    grupo_desc.add(&calidad_30);
     let carpeta = adw::ActionRow::builder()
         .title("Carpeta de la biblioteca")
         .subtitle(ctx.biblioteca().to_string_lossy())
