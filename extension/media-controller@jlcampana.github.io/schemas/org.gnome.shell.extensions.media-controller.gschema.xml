@@ -264,7 +264,7 @@
     </key>
 
     <key name="immersive-cover" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Immersive cover</summary>
       <description
             >Use the album art as the full popup background instead of the square or vinyl cover</description>
