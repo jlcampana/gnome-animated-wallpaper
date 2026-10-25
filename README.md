@@ -17,7 +17,7 @@ y un botón en Ajustes rápidos.
   estilo claro/oscuro/automático.
 - **Scripts** (`fondo-animado*`): convertir, quitar audio, miniaturas y control desde la terminal.
 - **Media Controller** ya no va aquí: se ha movido a su propio repo,
-  [mediaplayer-gnome-extension](https://github.com/jlcampana/mediaplayer-gnome-extension) (ver [abajo](#media-controller)).
+  [gnome-extension-mediaplayer](https://github.com/jlcampana/gnome-extension-mediaplayer) (ver [abajo](#media-controller)).
 
 ## Instalar
 
@@ -251,11 +251,11 @@ herramientas/ empaquetado de releases
 La extensión de controles multimedia (fork de
 [Advanced Media Controller](https://codeberg.org/sanjai-shaarugesh/Advanced-media-controller))
 **se ha movido a su propio repo**, con todo su historial:
-[jlcampana/mediaplayer-gnome-extension](https://github.com/jlcampana/mediaplayer-gnome-extension). Este instalador ya no la instala ni la toca;
+[jlcampana/gnome-extension-mediaplayer](https://github.com/jlcampana/gnome-extension-mediaplayer). Este instalador ya no la instala ni la toca;
 si ya la tenías, sigue funcionando. Para instalarla o actualizarla:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jlcampana/mediaplayer-gnome-extension/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jlcampana/gnome-extension-mediaplayer/main/install.sh | bash
 ```
 
 ## Licencia

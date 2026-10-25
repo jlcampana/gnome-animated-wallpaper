@@ -19,7 +19,7 @@
 #      ajustes, el lanzador, el icono y el servicio de systemd de usuario del gestor de
 #      descargas. No instala nada fuera de tu home salvo los paquetes.
 #   4. «Media Controller» (controles multimedia de la barra) ya no va aquí: se ha movido a
-#      https://github.com/jlcampana/mediaplayer-gnome-extension, que tiene su propio install.sh.
+#      https://github.com/jlcampana/gnome-extension-mediaplayer, que tiene su propio install.sh.
 #
 # Todo va dentro de main() para que bash lea el script entero antes de ejecutarlo: así
 # funciona con «curl | bash» y las preguntas se leen de /dev/tty.
@@ -287,8 +287,8 @@ instalar_ficheros() {
     cp "$EXT_DIR/schemas/$ESQUEMA.gschema.xml" "$DATOS/glib-2.0/schemas/"
 
     # Media Controller se ha movido a su propio repo; una instalación previa se deja tal cual.
-    info "Media Controller se ha movido a https://github.com/jlcampana/mediaplayer-gnome-extension"
-    info "  para instalarla o actualizarla: curl -fsSL https://raw.githubusercontent.com/jlcampana/mediaplayer-gnome-extension/main/install.sh | bash"
+    info "Media Controller se ha movido a https://github.com/jlcampana/gnome-extension-mediaplayer"
+    info "  para instalarla o actualizarla: curl -fsSL https://raw.githubusercontent.com/jlcampana/gnome-extension-mediaplayer/main/install.sh | bash"
 
     glib-compile-schemas "$DATOS/glib-2.0/schemas"
 
