@@ -66,6 +66,25 @@ pub fn ruta_version_30(original: &Path) -> PathBuf {
     original.parent().unwrap_or(Path::new(".")).join(CARPETA_30).join(format!("{base}.mp4"))
 }
 
+/// ¿Va el equipo con batería? (UPower; sin UPower, o sin batería, no.)
+pub fn con_bateria() -> bool {
+    let Ok(bus) = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE) else { return false };
+    bus.call_sync(
+        Some("org.freedesktop.UPower"),
+        "/org/freedesktop/UPower",
+        "org.freedesktop.DBus.Properties",
+        "Get",
+        Some(&("org.freedesktop.UPower", "OnBattery").to_variant()),
+        Some(glib::VariantTy::new("(v)").expect("tipo")),
+        gio::DBusCallFlags::NONE,
+        1000,
+        gio::Cancellable::NONE,
+    )
+    .ok()
+    .and_then(|r| r.child_value(0).as_variant()?.get::<bool>())
+    .unwrap_or(false)
+}
+
 /// Ficheros a medias de una descarga o una conversión.
 pub fn es_temporal(ruta: &Path) -> bool {
     let nombre = ruta.to_string_lossy();

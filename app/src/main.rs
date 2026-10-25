@@ -22,6 +22,8 @@ use gtk::{gio, glib};
 const CSS: &str = "
 .marca-actual { background: @accent_bg_color; color: @accent_fg_color; border-radius: 999px; padding: 4px; }
 .etiqueta-resolucion { background: rgba(0, 0, 0, 0.65); color: white; border-radius: 6px; padding: 1px 6px; }
+/* Qué versión del fondo actual se está reproduciendo. */
+.etiqueta-activa { background-color: @success_bg_color; color: @success_fg_color; font-weight: bold; border-radius: 6px; padding: 2px 8px; box-shadow: 0 1px 3px alpha(black, 0.45); }
 /* Texto de la etiqueta de fps de la biblioteca (la forma roja se dibuja debajo). */
 .etiqueta-fps { color: white; font-weight: bold; padding: 2px 8px 2px 15px; }
 flowboxchild { border-radius: 14px; padding: 6px; }
@@ -190,6 +192,10 @@ fn construir(app: &adw::Application) {
         accion("versiones-30-todas", Box::new(move || biblioteca.crear_versiones_30_todas()));
     }
     {
+        let biblioteca = biblioteca.clone();
+        accion("rehacer-30-todas", Box::new(move || biblioteca.rehacer_versiones_30_todas()));
+    }
+    {
         let v = ventana.clone();
         accion(
             "acerca",
@@ -245,6 +251,7 @@ fn menu_principal() -> gtk::MenuButton {
     let herramientas = gio::Menu::new();
     herramientas.append(Some("Quitar el audio de toda la biblioteca"), Some("win.sin-audio-todos"));
     herramientas.append(Some("Crear versiones de 30 fps de toda la biblioteca"), Some("win.versiones-30-todas"));
+    herramientas.append(Some("Rehacer todas las versiones de 30 fps"), Some("win.rehacer-30-todas"));
     menu.append_section(None, &herramientas);
     let final_ = gio::Menu::new();
     final_.append(Some("Acerca de Fondos animados"), Some("win.acerca"));

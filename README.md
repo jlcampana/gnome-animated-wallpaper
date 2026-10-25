@@ -117,13 +117,19 @@ esa versión. El menú ⋮ de cada fondo permite usar una u otra, y crear o borr
 menú principal tiene «Crear versiones de 30 fps de toda la biblioteca» (pide confirmación,
 enseña el avance y se puede cancelar entre vídeo y vídeo).
 
+Con *Ajustes → Usar la de 30 fps con batería* (clave `battery-30fps`), al desenchufar el portátil
+el fondo pasa a su versión de 30 fps (si la tiene) y al enchufarlo vuelve a la preferida. Lo
+decide la extensión con UPower; la app y `fondo-animado` siguen el mismo criterio al elegir fondo.
+
 Su calidad se elige en *Ajustes → Calidad de las versiones de 30 fps* (clave `quality-30fps`,
 el `-q` de `fondo-animado-convertir`): Alta (24), Normal (28, por defecto) o Ligera (32). Para
 un fondo no hace falta mucha: con x265, un 1440p de 60 fps a 20 Mbps queda a 30 fps en 2,2 Mbps
 con la Alta (VMAF 91), 1,2 con la Normal (87) y 0,7 con la Ligera (81). La calidad está en la
 escala de H.264/HEVC (0-51); para AV1 y VP9 por GPU, que cuantizan en 0-255, el script la pasa
-a (calidad + 8) × 4. «Rehacer la versión de 30 fps» (menú ⋮) la vuelve a crear con la calidad
-elegida.
+a (calidad + 8) × 4. Cambiar la calidad no rehace las versiones que ya
+existen: «Rehacer la versión de 30 fps» (menú ⋮) o «Rehacer todas las versiones de 30 fps» (menú
+principal) las vuelven a crear con la calidad elegida. La tarjeta del fondo activo lleva una
+etiqueta verde con la versión que se está reproduciendo («Activa: 30 fps»).
 
 ### Hardware y formato recomendado
 

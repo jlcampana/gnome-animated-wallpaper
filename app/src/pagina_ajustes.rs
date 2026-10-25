@@ -89,6 +89,12 @@ pub fn construir(ctx: &Rc<Contexto>) -> adw::PreferencesPage {
         });
     }
     grupo.add(&version);
+    let bateria = adw::SwitchRow::builder()
+        .title("Usar la de 30 fps con batería")
+        .subtitle("Al desenchufar, el fondo pasa a su versión de 30 fps si la tiene; al enchufar, vuelve")
+        .build();
+    ajustes.bind("battery-30fps", &bateria, "active").build();
+    grupo.add(&bateria);
     pagina.add(&grupo);
 
     // ── Descargas ──

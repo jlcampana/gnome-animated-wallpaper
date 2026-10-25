@@ -75,6 +75,11 @@
       <default>'original'</default>
       <summary>Versión que se usa de fondo cuando un vídeo tiene las dos (original y 30 fps)</summary>
     </key>
+    <key name="battery-30fps" type="b">
+      <default>false</default>
+      <summary>Usar la versión de 30 fps con batería</summary>
+      <description>Al desenchufar, el fondo pasa a su versión de 30 fps (si la tiene); al enchufar, vuelve a la de preferred-version.</description>
+    </key>
     <key name="app-color-scheme" type="s">
       <choices>
         <choice value="auto"/>

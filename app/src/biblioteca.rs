@@ -90,6 +90,8 @@ struct Tarjeta {
     detalle: gtk::Label,
     fps: gtk::Label,
     etiqueta: gtk::Overlay,
+    /// «Activa: 30 fps»: qué versión del fondo actual se está reproduciendo.
+    activa: gtk::Label,
 }
 
 pub struct Biblioteca {
@@ -235,7 +237,7 @@ impl Biblioteca {
     }
 
     fn preferir_30(&self) -> bool {
-        self.ctx.ajustes.string("preferred-version") == "30fps"
+        self.ctx.preferir_30()
     }
 
     fn usar(&self, ruta: &Path) {
@@ -357,6 +359,7 @@ impl Biblioteca {
             });
         }
         drop(infos);
+        self.marcar_actual();
         self.aplicar_filtro();
     }
 
@@ -372,9 +375,19 @@ impl Biblioteca {
 
     fn marcar_actual(&self) {
         let actual = self.ctx.video_actual();
+        let infos = self.infos.borrow();
         for t in self.tarjetas.borrow().iter() {
             let es = t.fondo.contiene(&actual);
             t.marca.set_visible(es);
+            t.activa.set_visible(es);
+            if es {
+                let es_30 = t.fondo.v30.as_deref() == Some(actual.as_path());
+                t.activa.set_label(&match infos.get(&actual) {
+                    Some(i) => format!("Activa: {:.0} fps", i.fps),
+                    None if es_30 => "Activa: 30 fps".to_string(),
+                    None => "Activa: original".to_string(),
+                });
+            }
             t.marca.set_tooltip_text(match (es, t.fondo.v30.as_deref() == Some(actual.as_path())) {
                 (true, true) => Some("De fondo: la versión de 30 fps"),
                 (true, false) if t.fondo.v30.is_some() => Some("De fondo: la versión original"),
@@ -410,6 +423,15 @@ impl Biblioteca {
         let encima = gtk::Overlay::builder().child(&imagen).build();
         encima.add_overlay(&marca);
         encima.add_overlay(&etiqueta);
+        let activa = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .margin_start(6)
+            .margin_top(6)
+            .css_classes(["etiqueta-activa", "caption"])
+            .visible(false)
+            .build();
+        encima.add_overlay(&activa);
 
         let titulo = gtk::Label::builder()
             .label(&fondo.nombre)
@@ -442,7 +464,7 @@ impl Biblioteca {
         caja.append(&pie);
         let hijo = gtk::FlowBoxChild::builder().child(&caja).build();
         hijo.insert_action_group("tarjeta", Some(&self.acciones(&fondo)));
-        Tarjeta { fondo, hijo, marca, detalle, fps, etiqueta }
+        Tarjeta { fondo, hijo, marca, detalle, fps, etiqueta, activa }
     }
 
     fn acciones(self: &Rc<Self>, fondo: &Fondo) -> gio::SimpleActionGroup {
@@ -570,6 +592,39 @@ impl Biblioteca {
             return;
         }
         self.crear_versiones_30(vec![original]);
+    }
+
+    /// Vuelve a crear todas las versiones de 30 fps con la calidad de Ajustes (pide confirmación):
+    /// para cuando se cambia la calidad, que no se aplica sola a las ya hechas.
+    pub fn rehacer_versiones_30_todas(self: &Rc<Self>) {
+        let originales: Vec<PathBuf> = self.fondos().into_iter().filter(|f| f.v30.is_some()).filter_map(|f| f.original).collect();
+        if originales.is_empty() {
+            self.ctx.aviso("No hay versiones de 30 fps que rehacer");
+            return;
+        }
+        let calidad = match self.ctx.calidad_30() {
+            24 => "Alta".to_string(),
+            28 => "Normal".to_string(),
+            32 => "Ligera".to_string(),
+            q => format!("{q}"),
+        };
+        let yo = self.clone();
+        glib::spawn_future_local(async move {
+            let dialogo = adw::AlertDialog::new(
+                Some(&format!("¿Rehacer {} versión(es) de 30 fps?", originales.len())),
+                Some(&format!(
+                    "Se vuelven a crear con la calidad elegida en Ajustes ({calidad}) y sustituyen a las \
+                     de ahora. Los originales no se tocan. Puede tardar bastante.\n\n{}",
+                    originales.iter().map(|r| nombre(r)).collect::<Vec<_>>().join("\n")
+                )),
+            );
+            dialogo.add_responses(&[("cancelar", "Cancelar"), ("rehacer", "Rehacer")]);
+            dialogo.set_response_appearance("rehacer", adw::ResponseAppearance::Suggested);
+            dialogo.set_default_response(Some("cancelar"));
+            if dialogo.choose_future(Some(&yo.ctx.ventana)).await == "rehacer" {
+                yo.crear_versiones_30(originales);
+            }
+        });
     }
 
     /// Crea la versión de 30 fps de los originales de la biblioteca que vayan más rápido y aún

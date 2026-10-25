@@ -62,7 +62,20 @@ fondos() {
     } | sort -f -t "$SEP" -k1,1
 }
 
-preferida() { g get preferred-version | quitar_comillas; }
+con_bateria() {
+    [[ $(busctl get-property org.freedesktop.UPower /org/freedesktop/UPower \
+        org.freedesktop.UPower OnBattery 2>/dev/null) == "b true" ]]
+}
+
+# La versión que toca: la de 30 fps si se va con batería y está battery-30fps (como la
+# extensión); si no, la preferida.
+preferida() {
+    if [[ $(g get battery-30fps) == true ]] && con_bateria; then
+        echo 30fps
+    else
+        g get preferred-version | quitar_comillas
+    fi
+}
 
 # La versión que se usa de un fondo: $1 original, $2 versión de 30, $3 original | 30fps.
 elegida() {
@@ -95,7 +108,7 @@ case "${1:-estado}" in
         con_30=$(printf '%s\n' "${lista[@]}" | awk -F "$SEP" '$2 != "" && $3 != ""' | wc -l)
         echo "activo:     $(g get enabled)"
         echo "vídeo:      $video$([[ -n $video ]] && es_version_30 "$video" && echo " (versión de 30 fps)" || true)"
-        echo "versión:    $(preferida) (la que se usa si un fondo tiene las dos)"
+        echo "versión:    $(preferida) (la que se usa si un fondo tiene las dos$(con_bateria && [[ $(g get battery-30fps) == true ]] && echo "; con batería" || true))"
         echo "ajuste:     $(g get fit | quitar_comillas)"
         echo "biblioteca: $(biblioteca) (${#lista[@]} fondos, $con_30 con versión de 30 fps)"
         ;;
@@ -130,14 +143,14 @@ case "${1:-estado}" in
         poner "$(elegida "$o" "$t" "$(preferida)")"
         ;;
     version)
-        if [[ -z ${2:-} ]]; then preferida; exit 0; fi
+        if [[ -z ${2:-} ]]; then g get preferred-version | quitar_comillas; exit 0; fi
         [[ $2 == original || $2 == 30fps ]] || { echo "versión desconocida: $2 (original o 30fps)" >&2; exit 1; }
         g set preferred-version "$2"
         # La extensión cambia el fondo actual; aquí también, por si no está activa.
         actual=$(g get video | quitar_comillas)
         while IFS=$SEP read -r n o t; do
             if [[ -n $actual && ($actual == "$o" || $actual == "$t") ]]; then
-                nuevo=$(elegida "$o" "$t" "$2")
+                nuevo=$(elegida "$o" "$t" "$(preferida)")
                 [[ $nuevo != "$actual" ]] && g set video "$nuevo"
                 break
             fi

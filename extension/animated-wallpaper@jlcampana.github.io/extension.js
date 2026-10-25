@@ -95,12 +95,21 @@ function listarFondos(ajustes) {
 
 const esVersion30 = ruta => GLib.path_get_basename(GLib.path_get_dirname(ruta)) === CARPETA_30;
 
-// La versión de un fondo que se usa, según la preferencia (preferred-version).
-function versionElegida(ajustes, fondo) {
-    if (ajustes.get_string('preferred-version') === '30fps')
+// La versión de un fondo que se usa, según la preferencia ('original' o '30fps'; ver
+// FondosAnimados.preferencia()).
+function versionElegida(preferencia, fondo) {
+    if (preferencia === '30fps')
         return fondo.v30 ?? fondo.original;
     return fondo.original ?? fondo.v30;
 }
+
+// UPower, para saber si el equipo va con batería (battery-30fps).
+const UPowerProxy = Gio.DBusProxy.makeProxyWrapper(`
+<node>
+  <interface name="org.freedesktop.UPower">
+    <property name="OnBattery" type="b" access="read"/>
+  </interface>
+</node>`);
 
 const nombreVideo = ruta => GLib.path_get_basename(ruta).replace(/\.[^.]+$/, '');
 
@@ -235,7 +244,7 @@ class BotonFondos extends QuickMenuToggle {
             item.setOrnament(esActual ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
             item.connect('key-focus-in', () => ensureActorVisibleInScrollView(this._scroll, item));
             item.connect('activate', () => {
-                this._ajustes.set_string('video', versionElegida(this._ajustes, fondo));
+                this._ajustes.set_string('video', versionElegida(this._ext.preferencia(), fondo));
                 this._ajustes.set_boolean('enabled', true);
             });
             this._lista.addMenuItem(item);
@@ -299,6 +308,22 @@ export default class FondosAnimados extends Extension {
         this._idPausa = 0;
         this._idReintento = 0;
         this.pausaManual = false;
+        this._upower = null;
+
+        // Con battery-30fps, al desenchufar se pasa a la versión de 30 fps y al enchufar se
+        // vuelve. Asíncrono: el bus del sistema puede tardar y no hay que retrasar el arranque.
+        new UPowerProxy(Gio.DBus.system, 'org.freedesktop.UPower', '/org/freedesktop/UPower',
+            (proxy, error) => {
+                if (error) {
+                    this._depurar(`sin UPower: ${error.message}`);
+                    return;
+                }
+                if (!this._ajustes)   // desactivada mientras tanto
+                    return;
+                this._upower = proxy;
+                proxy.connectObject('g-properties-changed', () => this._cambiarVersion(), this);
+                this._cambiarVersion();
+            });
 
         this._inyecciones = new InjectionManager();
         const yo = this;
@@ -323,6 +348,7 @@ export default class FondosAnimados extends Extension {
             'changed::debug', () => this._reiniciar(),
             'changed::video', () => this._cambiarVideo(),
             'changed::preferred-version', () => this._cambiarVersion(),
+            'changed::battery-30fps', () => this._cambiarVersion(),
             'changed::fit', () => this._enviar(`fit ${this._ajustes.get_string('fit')}`),
             'changed::pause-fullscreen', () => this._colaPausa(),
             'changed::pause-maximized', () => this._colaPausa(),
@@ -367,6 +393,8 @@ export default class FondosAnimados extends Extension {
         Main.overview.disconnectObject(this);
         Main.sessionMode.disconnectObject(this);
         this._ajustes.disconnectObject(this);
+        this._upower?.disconnectObject(this);
+        this._upower = null;
 
         this._inyecciones.clear();
         this._inyecciones = null;
@@ -571,11 +599,21 @@ export default class FondosAnimados extends Extension {
             this._reiniciar();
     }
 
-    // Al cambiar la versión preferida, el fondo actual pasa a esa versión si la tiene.
+    // La versión que toca ahora: la de 30 fps si se va con batería y está battery-30fps; si no,
+    // la preferida.
+    preferencia() {
+        if (this._ajustes.get_boolean('battery-30fps') && this._upower?.OnBattery)
+            return '30fps';
+        return this._ajustes.get_string('preferred-version');
+    }
+
+    // Al cambiar la versión que toca (preferencia o batería), el fondo actual pasa a esa versión
+    // si la tiene.
     _cambiarVersion() {
         const actual = this._ajustes.get_string('video');
         const fondo = listarFondos(this._ajustes).find(f => f.original === actual || f.v30 === actual);
-        const elegida = fondo ? versionElegida(this._ajustes, fondo) : null;
+        const elegida = fondo ? versionElegida(this.preferencia(), fondo) : null;
+        this._depurar(`versión: ${this.preferencia()} (batería: ${this._upower?.OnBattery})`);
         if (elegida && elegida !== actual)
             this._ajustes.set_string('video', elegida);
     }

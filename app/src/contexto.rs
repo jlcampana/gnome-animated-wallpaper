@@ -64,6 +64,13 @@ impl Contexto {
         activo.then(config::resolucion_pantalla)
     }
 
+    /// ¿Toca la versión de 30 fps? La preferida, o la de 30 si se va con batería y está
+    /// battery-30fps (lo mismo que decide la extensión).
+    pub fn preferir_30(&self) -> bool {
+        self.ajustes.string("preferred-version") == "30fps"
+            || (self.ajustes.boolean("battery-30fps") && config::con_bateria())
+    }
+
     /// Calidad (QP/CRF) de las versiones de 30 fps (ajuste quality-30fps).
     pub fn calidad_30(&self) -> i32 {
         self.ajustes.int("quality-30fps")
