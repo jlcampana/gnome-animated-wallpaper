@@ -1,5 +1,5 @@
 //! Página «Ajustes»: estado de la extensión, reproducción, descargas, hardware detectado y
-//! estilo de la app.
+//! estilo de la app, y la versión.
 
 use std::rc::Rc;
 
@@ -259,6 +259,12 @@ pub fn construir(ctx: &Rc<Contexto>) -> adw::PreferencesPage {
     ajustes.bind("debug", &depurar, "active").build();
     grupo_dep.add(&depurar);
     pagina.add(&grupo_dep);
+
+    let grupo_ver = adw::PreferencesGroup::new();
+    let version = adw::ActionRow::builder().title("Versión").subtitle(env!("CARGO_PKG_VERSION")).build();
+    version.add_css_class("property");
+    grupo_ver.add(&version);
+    pagina.add(&grupo_ver);
 
     pagina
 }
