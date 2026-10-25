@@ -43,7 +43,6 @@
 
 .panel-scroll-label {
     margin-left: 6px;
-    font-size: 13px;
 }
 
 .popup-menu-container {
@@ -104,6 +103,14 @@
     height: 340px;
 }
 
+/* Floating lyrics panel under the popup */
+.media-lyrics-float {
+    border-radius: 16px;
+    background-color: rgba(24, 24, 28, 0.92);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    color: #fff;
+}
+
 /* Popup — macOS / Gapless look */
 .media-controller-menu .popup-menu-content {
     border-radius: 22px;
@@ -117,18 +124,15 @@
     background-color: transparent;
 }
 
-.media-controls-modern {
-    font-family: "Inter", "Adwaita Sans", sans-serif;
-}
-
 /* Time labels under the progress bar */
 .media-time-box {
     margin: 0 10px;
 }
 
 .media-time-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
+    font-feature-settings: "tnum";
     color: rgba(127, 127, 127, 1);
 }
 

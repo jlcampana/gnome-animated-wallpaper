@@ -1,3 +1,4 @@
+import GLib from "gi://GLib";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 
 const BROWSER_MPRIS_PREFIXES = [
@@ -17,9 +18,52 @@ const BROWSER_MPRIS_PREFIXES = [
   "floorp",
 ];
 
+// Browsers report "Stopped" for a moment between tracks; waiting this long
+// before hiding keeps the indicator (and its open popup) from flickering.
+const HIDE_GRACE_MS = 1500;
+
 export class IndicatorUIUpdater {
   constructor(indicator) {
     this._indicator = indicator;
+    this._hideGraceId = 0;
+    this._hideNow = false;
+  }
+
+  destroy() {
+    this._cancelHide();
+  }
+
+  _cancelHide() {
+    if (!this._hideGraceId) return;
+    GLib.Source.remove(this._hideGraceId);
+    this._hideGraceId = 0;
+  }
+
+  _show() {
+    this._cancelHide();
+    this._indicator.show();
+  }
+
+  /** @returns {boolean} true while the hide is being postponed */
+  _deferHide() {
+    if (this._hideNow || !this._indicator.visible) return false;
+    if (!this._hideGraceId) {
+      this._hideGraceId = GLib.timeout_add(
+        GLib.PRIORITY_DEFAULT,
+        HIDE_GRACE_MS,
+        () => {
+          this._hideGraceId = 0;
+          this._hideNow = true;
+          try {
+            this.updateVisibility();
+          } finally {
+            this._hideNow = false;
+          }
+          return GLib.SOURCE_REMOVE;
+        },
+      );
+    }
+    return true;
   }
 
   _isBrowserPlayer(name) {
@@ -69,18 +113,21 @@ export class IndicatorUIUpdater {
     const isUnlockDialog = Main.sessionMode.currentMode === "unlock-dialog";
 
     if (isLocked || isUnlockDialog) {
+      this._cancelHide();
       this._indicator.hide();
       return;
     }
 
     const manager = this._indicator._manager;
     if (!manager) {
+      if (this._deferHide()) return;
       this._indicator.hide();
       return;
     }
 
     const players = manager.getPlayers();
     if (players.length === 0) {
+      if (this._deferHide()) return;
       this._indicator.hide();
       return;
     }
@@ -95,7 +142,7 @@ export class IndicatorUIUpdater {
     const currentIsStopped = info && info.status === "Stopped";
 
     if (currentHasMedia) {
-      this._indicator.show();
+      this._show();
       return;
     }
 
@@ -113,9 +160,10 @@ export class IndicatorUIUpdater {
             this._indicator._state._currentPlayer = fallback;
           this.updateUI();
           this.updateTabs();
-          this._indicator.show();
+          this._show();
           return;
         }
+        if (this._deferHide()) return;
         this._indicator._state._currentPlayer = null;
         this._indicator._panelUI.stopScrolling();
         this._indicator._panelUI.label.hide();
@@ -123,7 +171,7 @@ export class IndicatorUIUpdater {
         return;
       }
 
-      this._indicator.show();
+      this._show();
       return;
     }
 
@@ -136,7 +184,7 @@ export class IndicatorUIUpdater {
         ) {
           this._indicator._state._currentPlayer = name;
           this.updateUI();
-          this._indicator.show();
+          this._show();
           return;
         }
       }
@@ -147,12 +195,13 @@ export class IndicatorUIUpdater {
           pInfo &&
           (pInfo.status === "Playing" || pInfo.status === "Paused")
         ) {
-          this._indicator.show();
+          this._show();
           return;
         }
       }
     }
 
+    if (this._deferHide()) return;
     this._indicator.hide();
   }
 
@@ -170,6 +219,8 @@ export class IndicatorUIUpdater {
       this._indicator._state._currentPlayer,
     );
     if (!info) {
+      // Browsers clear the metadata for a moment between tracks
+      if (this._deferHide()) return;
       this._indicator._panelUI.stopScrolling();
       this._indicator._panelUI.label.hide();
       this._indicator.hide();

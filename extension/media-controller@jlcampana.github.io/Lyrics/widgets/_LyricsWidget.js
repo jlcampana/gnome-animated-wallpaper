@@ -48,7 +48,12 @@ export const LyricsWidget = GObject.registerClass(
     Signals: { dismiss: {} },
   },
   class LyricsWidget extends St.Widget {
-    _init(width = 340, height = 340, settings = null) {
+    _init(
+      width = 340,
+      height = 340,
+      settings = null,
+      { followPopupWidth = true } = {},
+    ) {
       super._init({
         style_class: "lyrics-widget",
         reactive: false,
@@ -62,6 +67,7 @@ export const LyricsWidget = GObject.registerClass(
       this._width = width;
       this._height = height;
       this._settings = settings;
+      this._followPopupWidth = followPopupWidth;
       this._widthChangedId = 0;
       this._fontChangedId = 0;
 
@@ -185,7 +191,7 @@ export const LyricsWidget = GObject.registerClass(
     }
 
     _onPopupWidthChanged() {
-      if (!this._settings) return;
+      if (!this._settings || !this._followPopupWidth) return;
       const w = Math.max(280, this._settings.get_int("popup-width"));
       this.setSize(w, w);
     }

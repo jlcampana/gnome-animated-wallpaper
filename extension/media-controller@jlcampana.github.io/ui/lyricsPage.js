@@ -21,7 +21,8 @@ export function buildLyricsPage(page, settings) {
   const enableLyricsRow = new Adw.SwitchRow({
     title: _("Enable Synced Lyrics"),
     subtitle: _(
-      "Fetch and display scrolling lyrics that follow the current playback position",
+      "Show a small panel under the popup with lyrics that follow the song. " +
+        "Click the cover to hide or show it.",
     ),
     icon_name: "audio-x-generic-symbolic",
   });
@@ -36,7 +37,7 @@ export function buildLyricsPage(page, settings) {
   const gradientRow = new Adw.SwitchRow({
     title: _("Gradient Background"),
     subtitle: _(
-      "In immersive mode, show a gradient from the cover colours behind the lyrics instead of the cover image",
+      "Tint the lyrics panel with the cover colours",
     ),
     icon_name: "preferences-desktop-appearance-symbolic",
   });

@@ -7,8 +7,10 @@ import GdkPixbuf from "gi://GdkPixbuf";
 import Pango from "gi://Pango";
 import Cairo from "cairo";
 
+import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { gettext as _ } from "resource:///org/gnome/shell/extensions/extension.js";
 import { setSourcePixbuf } from "../core/pixbufSurface.js";
+import { HdCoverFinder, isSmallCover } from "../core/hdCover.js";
 
 import { ControlButtons } from "./ControlButtons.js";
 import { AlbumArt } from "./AlbumArt.js";
@@ -24,8 +26,20 @@ const LYRICS_POLL_MS = 250;
 const MIN_POPUP_WIDTH = 280;
 const BACKDROP_WIDTH = 512;
 const BACKDROP_RATIO = 2.4;
-const FADE_START = 0.6;
-const ART_OVERLAP = 0.18;
+// Immersive cover: tall covers are cropped to this height/width ratio and the
+// controls sit on its lower part, leaving at least ART_MIN_ROOM px of art.
+const COVER_MAX_ASPECT = 0.9;
+const ART_MIN_ROOM = 96;
+const SCRIM_START = 0.25;
+
+const LYRICS_FLOAT_HEIGHT = 132;
+const LYRICS_FLOAT_GAP = 10;
+const LYRICS_FLOAT_METRICS = {
+  activeSize: 17,
+  neighborSize: 13,
+  inactiveSize: 12,
+  spacing: 10,
+};
 
 const APPEARANCE_KEYS = [
   "popup-title-font-family",
@@ -66,9 +80,9 @@ function textStyle(s, kind, defaults) {
 }
 
 const popupTitleStyle = (s) =>
-  textStyle(s, "title", { size: 16, weight: "500" });
+  textStyle(s, "title", { size: 18, weight: "500" });
 const popupArtistStyle = (s) =>
-  textStyle(s, "artist", { size: 13, weight: "normal" });
+  textStyle(s, "artist", { size: 15, weight: "normal" });
 
 export const MediaControls = GObject.registerClass(
   {
@@ -106,6 +120,7 @@ export const MediaControls = GObject.registerClass(
       this._artistScrollLabel = null;
 
       this._lyricsClient = null;
+      this._hdCovers = null;
       this._lyricsView = null;
       this._playerLyricsState = new Map();
       this._lyricsCache = new Map();
@@ -119,7 +134,9 @@ export const MediaControls = GObject.registerClass(
       this._backdropUri = null;
       this._backdropColor = "#000";
       this._gradient = null;
-      this._lyricsGradient = false;
+      this._lyricsShown = false;
+      this._lyricsFloat = null;
+      this._floatAnchor = null;
       this._coverAspect = 1;
       this._repinId = 0;
 
@@ -132,8 +149,15 @@ export const MediaControls = GObject.registerClass(
       this._connect(settings, "changed::info-align-center", () =>
         this._applyInfoAlignment(),
       );
+      this._connect(settings, "changed::enable-lyrics", () => {
+        const on = settings.get_boolean("enable-lyrics");
+        for (const state of this._playerLyricsState.values()) state.visible = on;
+        if (!this._currentPlayerName) return;
+        if (on) this._showLyricsForPlayer(this._currentPlayerName);
+        else this._hideLyricsForPlayer(this._currentPlayerName);
+      });
       this._connect(settings, "changed::lyrics-gradient-background", () =>
-        this._syncLyricsBackdrop(),
+        this._syncLyricsFloat(),
       );
 
       for (const key of APPEARANCE_KEYS) {
@@ -218,17 +242,8 @@ export const MediaControls = GObject.registerClass(
       this._resetFrame();
 
       if (this._immersive) {
-        this._lyricsGradient = this._lyricsGradientOn();
         const backdropCss = (width) => {
           if (!this._backdropUri) return "";
-          if (this._lyricsGradient && this._gradient) {
-            const [from, to] = this._gradient;
-            return (
-              ` background-gradient-direction: vertical;` +
-              ` background-gradient-start: ${from};` +
-              ` background-gradient-end: ${to};`
-            );
-          }
           const uri = this._backdropUri.replace(/'/g, "%27");
           const bgWidth = Math.ceil(width) + 2;
           const bgHeight = Math.round(bgWidth * BACKDROP_RATIO);
@@ -310,20 +325,31 @@ export const MediaControls = GObject.registerClass(
         : "margin-bottom: 20px; spacing: 8px;";
     }
 
-    _artSlotStyle() {
-      if (!this._immersive || !this._coverUri || !this._artSlot) return "";
-      const room =
-        Math.round(this._content.width * this._coverAspect) -
-        this._artSlot.y -
-        Math.round(this._content.width * ART_OVERLAP);
-      return room > 0 ? `max-height: ${room}px;` : "";
+    // Shrinks the art slot so the info and controls below it end where the
+    // (cropped) cover does: everything sits on top of the artwork.
+    // max-height cannot shrink the slot below the album art's minimum size,
+    // so the height is forced (and clipped); -1 restores the natural size.
+    _artSlotHeight() {
+      if (!this._immersive || !this._coverUri || !this._artSlot) return -1;
+      const slot = this._artSlot;
+      const below = this._content.height - (slot.y + slot.height);
+      if (below <= 0) return slot.natural_height_set ? slot.height : -1;
+      return Math.max(
+        ART_MIN_ROOM,
+        Math.round(this._content.width * this._coverAspect) - slot.y - below,
+      );
     }
 
     _refitArtSlot() {
-      if (!this._artSlot || this._artSlot.get_child() !== this._albumArt)
-        return;
-      const style = this._artSlotStyle();
-      if ((this._artSlot.style ?? "") !== style) this._artSlot.style = style;
+      if (!this._artSlot) return;
+      const slot = this._artSlot;
+      const height = this._artSlotHeight();
+      if (height < 0) {
+        if (slot.natural_height_set) slot.set_height(-1);
+      } else if (!slot.natural_height_set || slot.height !== height) {
+        slot.set_height(height);
+      }
+      slot.clip_to_allocation = height >= 0;
     }
 
     _setCover(uri) {
@@ -331,19 +357,6 @@ export const MediaControls = GObject.registerClass(
       this._backdropUri = this._coverUri
         ? this._composeBackdrop(this._coverUri)
         : null;
-    }
-
-    _lyricsGradientOn() {
-      return (
-        this._immersive &&
-        this._artSlot?.get_child() === this._lyricsView &&
-        this._settings.get_boolean("lyrics-gradient-background")
-      );
-    }
-
-    _syncLyricsBackdrop() {
-      if (this._lyricsGradientOn() === this._lyricsGradient) return;
-      this._applyRootStyle();
     }
 
     _tone(pixbuf, from, to) {
@@ -368,7 +381,8 @@ export const MediaControls = GObject.registerClass(
       try {
         const src = Gio.File.new_for_uri(uri).get_path();
         const cover = GdkPixbuf.Pixbuf.new_from_file(src);
-        this._coverAspect = cover.get_height() / cover.get_width();
+        const aspect = cover.get_height() / cover.get_width();
+        this._coverAspect = Math.min(aspect, COVER_MAX_ASPECT);
 
         const base = this._tone(cover, 10, 16).map((v) => v * 0.55);
         const end = base.map((v) => v * 0.6);
@@ -389,19 +403,19 @@ export const MediaControls = GObject.registerClass(
           "backdrop",
         ]);
         GLib.mkdir_with_parents(dir, 0o755);
-        const out = GLib.build_filenamev([dir, `${name}-v3.png`]);
+        const out = GLib.build_filenamev([dir, `${name}-v4.png`]);
         if (GLib.file_test(out, GLib.FileTest.EXISTS)) return `file://${out}`;
 
         const width = BACKDROP_WIDTH;
         const height = Math.round(width * BACKDROP_RATIO);
-        const artHeight = Math.min(
-          Math.round(width * this._coverAspect),
-          height,
-        );
+        const artHeight = Math.round(width * this._coverAspect);
+        const fullHeight = Math.round(width * aspect);
         const art = cover.scale_simple(
           width,
-          artHeight,
-          GdkPixbuf.InterpType.BILINEAR,
+          fullHeight,
+          cover.get_width() < width
+            ? GdkPixbuf.InterpType.HYPER
+            : GdkPixbuf.InterpType.BILINEAR,
         );
 
         const surface = new Cairo.ImageSurface(
@@ -418,17 +432,47 @@ export const MediaControls = GObject.registerClass(
         cr.rectangle(0, artHeight, width, height - artHeight);
         cr.fill();
 
-        setSourcePixbuf(cr, art, 0, 0);
+        // Centre crop of tall covers
+        setSourcePixbuf(cr, art, 0, -Math.round((fullHeight - artHeight) / 2));
         cr.rectangle(0, 0, width, artHeight);
         cr.fill();
 
-        const fadeTop = artHeight * FADE_START;
+        // Scrim so the controls stay readable on top of the art
+        const fadeTop = artHeight * SCRIM_START;
         const fade = new Cairo.LinearGradient(0, fadeTop, 0, artHeight);
         fade.addColorStopRGBA(0, ...base, 0);
-        fade.addColorStopRGBA(0.55, ...base, 0.5);
+        fade.addColorStopRGBA(0.45, ...base, 0.5);
+        fade.addColorStopRGBA(0.8, ...base, 0.85);
         fade.addColorStopRGBA(1, ...base, 1);
         cr.setSource(fade);
         cr.rectangle(0, fadeTop, width, artHeight - fadeTop);
+        cr.fill();
+
+        // Glossy highlight: a curved sheet of light over the top half
+        cr.moveTo(0, 0);
+        cr.lineTo(width, 0);
+        cr.lineTo(width, artHeight * 0.3);
+        cr.curveTo(
+          width * 0.65,
+          artHeight * 0.4,
+          width * 0.3,
+          artHeight * 0.46,
+          0,
+          artHeight * 0.5,
+        );
+        cr.closePath();
+        const gloss = new Cairo.LinearGradient(0, 0, 0, artHeight * 0.5);
+        gloss.addColorStopRGBA(0, 1, 1, 1, 0.22);
+        gloss.addColorStopRGBA(0.6, 1, 1, 1, 0.06);
+        gloss.addColorStopRGBA(1, 1, 1, 1, 0.02);
+        cr.setSource(gloss);
+        cr.fill();
+
+        const sheen = new Cairo.LinearGradient(0, 0, 0, 4);
+        sheen.addColorStopRGBA(0, 1, 1, 1, 0.35);
+        sheen.addColorStopRGBA(1, 1, 1, 1, 0);
+        cr.setSource(sheen);
+        cr.rectangle(0, 0, width, 4);
         cr.fill();
 
         surface.writeToPNG(out);
@@ -443,23 +487,13 @@ export const MediaControls = GObject.registerClass(
     }
 
     _applyPopupWidth() {
-      const w = popupWidth(this._settings);
       this._applyRootStyle();
       this._titleSlot.style = `min-height: 28px; max-width: ${titleWidth(this._settings)}px;`;
       this._artistSlot.style = `min-height: 22px; max-width: ${artistWidth(this._settings)}px;`;
 
       if (this._currentTrackInfo) this._refreshLabels();
 
-      this._lyricsView?.setSize?.(w, w);
-
-      if (this._artSlot?.get_child() === this._lyricsView) {
-        this._artSlot.style = "";
-        this._repinId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-          this._repinId = 0;
-          this._showInArtSlot(this._lyricsView);
-          return GLib.SOURCE_REMOVE;
-        });
-      }
+      this._queueLyricsFloat();
     }
 
     _applyInfoAlignment() {
@@ -504,6 +538,10 @@ export const MediaControls = GObject.registerClass(
       this._connect(this._artSlot, "notify::allocation", () =>
         this._refitArtSlot(),
       );
+      // The fit depends on the content height, which settles after the slot's
+      this._connect(this._content, "notify::height", () =>
+        this._refitArtSlot(),
+      );
 
       this._albumArt = new AlbumArt(settings, null, null);
       this._connect(this._albumArt, "single-click", () =>
@@ -518,14 +556,26 @@ export const MediaControls = GObject.registerClass(
         this._applyRootStyle();
       });
 
-      const w = popupWidth(settings);
-      this._lyricsView = new LyricsWidget(w, w, settings);
+      this._lyricsView = new LyricsWidget(
+        popupWidth(settings),
+        LYRICS_FLOAT_HEIGHT,
+        settings,
+        { followPopupWidth: false },
+      );
+      this._lyricsView.updateAppearance(LYRICS_FLOAT_METRICS);
       this._connect(this._lyricsView, "dismiss", () =>
         this._hideLyricsForPlayer(this._currentPlayerName),
       );
 
+      // Lyrics float in a small panel under the popup, not over the cover
+      this._lyricsFloat = new St.Bin({
+        style_class: "media-lyrics-float",
+        child: this._lyricsView,
+        visible: false,
+      });
+      Main.uiGroup.add_child(this._lyricsFloat);
+
       this._artSlot.set_child(this._albumArt);
-      this._lyricsView.y_align = Clutter.ActorAlign.START;
       this._content.add_child(this._artSlot);
 
       this._infoBox = new St.BoxLayout({
@@ -582,6 +632,10 @@ export const MediaControls = GObject.registerClass(
 
       this._connect(this, "notify::mapped", () => {
         if (this._immersive && this.mapped) this._applyRootStyle();
+        this._queueLyricsFloat();
+      });
+      this._connect(this, "notify::allocation", () => {
+        if (this._lyricsFloat?.visible) this._queueLyricsFloat();
       });
 
       this._immersive = this._albumArt.immersive;
@@ -713,6 +767,25 @@ export const MediaControls = GObject.registerClass(
       this._artistSlot?.destroy_all_children();
     }
 
+    // Browsers only hand over a thumbnail; swap it for the store artwork
+    _upgradeCover(info) {
+      const artUrl = info.artUrl;
+      if (!artUrl || !this._settings.get_boolean("hd-cover-lookup")) return;
+      if (!artUrl.startsWith("file://") || !isSmallCover(artUrl)) return;
+
+      this._hdCovers ??= new HdCoverFinder();
+      const player = this._currentPlayerName;
+      this._hdCovers.find(info).then((uri) => {
+        if (
+          uri &&
+          this._hdCovers &&
+          this._currentPlayerName === player &&
+          this._currentTrackInfo?.artUrl === artUrl
+        )
+          this._albumArt.loadCover(uri);
+      });
+    }
+
     update(info, playerName, manager) {
       if (!info) return;
 
@@ -733,6 +806,8 @@ export const MediaControls = GObject.registerClass(
       ) {
         this._albumArt.loadCover(info.artUrl);
       }
+      if (playerChanged || this._playerArtCache.get(playerName) !== info.artUrl)
+        this._upgradeCover(info);
       this._playerArtCache.set(playerName, info.artUrl);
 
       this._updateTitleLabel(info.title || "Unknown", info.status);
@@ -865,22 +940,87 @@ export const MediaControls = GObject.registerClass(
       );
     }
 
-    _showInArtSlot(child) {
-      if (!this._artSlot) return;
-      if (child === this._lyricsView) {
-        const [, natural] = this._albumArt.get_preferred_height(-1);
-        this._artSlot.style = `min-height: ${Math.ceil(natural)}px;`;
-      } else {
-        this._artSlot.style = this._artSlotStyle();
+    _setLyricsShown(shown) {
+      this._lyricsShown = shown;
+      this._syncLyricsFloat();
+    }
+
+    // Placement waits for an idle so it never relayouts mid-allocation
+    _queueLyricsFloat() {
+      if (this._repinId) return;
+      this._repinId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+        this._repinId = 0;
+        this._syncLyricsFloat();
+        return GLib.SOURCE_REMOVE;
+      });
+    }
+
+    // The popup moves when the panel label changes width; follow it
+    _followAnchor(actor) {
+      if (actor === this._floatAnchor) return;
+      this._floatAnchor?.disconnectObject(this);
+      this._floatAnchor = actor;
+      actor?.connectObject(
+        "notify::allocation", () => this._queueLyricsFloat(),
+        "destroy", () => (this._floatAnchor = null),
+        this,
+      );
+    }
+
+    _syncLyricsFloat() {
+      const float = this._lyricsFloat;
+      if (!float) return;
+
+      if (!this._lyricsShown || !this.mapped) {
+        float.remove_all_transitions();
+        float.hide();
+        return;
       }
-      this._artSlot.set_child(child);
-      this._syncLyricsBackdrop();
+
+      const frame = this._frameActors();
+      const box = frame[frame.length - 1] ?? this;
+      const pointer = this._pointerActor(frame);
+      this._followAnchor(pointer);
+
+      // Allocation-based coordinates skip the popup's open animation offset
+      let [x, y] = box.get_transformed_position();
+      if (pointer) {
+        const [px, py] = pointer.get_transformed_position();
+        x += pointer.x - px;
+        y += pointer.y - py;
+      }
+      const width = Math.round(box.width);
+      this._lyricsView.setSize(width, LYRICS_FLOAT_HEIGHT);
+      float.set_position(
+        Math.round(x),
+        Math.round(y + box.height + LYRICS_FLOAT_GAP),
+      );
+
+      let style = `width: ${width}px; height: ${LYRICS_FLOAT_HEIGHT}px;`;
+      if (this._gradient && this._settings.get_boolean("lyrics-gradient-background")) {
+        const [from, to] = this._gradient;
+        style +=
+          ` background-gradient-direction: vertical;` +
+          ` background-gradient-start: ${from};` +
+          ` background-gradient-end: ${to};`;
+      }
+      float.style = style;
+
+      if (!float.visible) {
+        float.opacity = 0;
+        float.show();
+        float.ease({
+          opacity: 255,
+          duration: 200,
+          mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+      }
     }
 
     _getPlayerLyricsState(playerName) {
       if (!this._playerLyricsState.has(playerName))
         this._playerLyricsState.set(playerName, {
-          visible: false,
+          visible: true,
           lastKey: null,
         });
       return this._playerLyricsState.get(playerName);
@@ -888,13 +1028,12 @@ export const MediaControls = GObject.registerClass(
 
     _applyLyricsState(_playerName, state) {
       if (!state.visible) {
-        if (this._artSlot?.get_child() === this._lyricsView)
-          this._showInArtSlot(this._albumArt);
+        this._setLyricsShown(false);
         this._stopLyricsSyncTimer();
         return;
       }
 
-      this._showInArtSlot(this._lyricsView);
+      this._setLyricsShown(true);
 
       const info = this._currentTrackInfo;
       const key = info ? trackKey(info) : null;
@@ -918,7 +1057,7 @@ export const MediaControls = GObject.registerClass(
     _showLyricsForPlayer(playerName) {
       const state = this._getPlayerLyricsState(playerName);
       state.visible = true;
-      this._showInArtSlot(this._lyricsView);
+      this._setLyricsShown(true);
 
       const info = this._currentTrackInfo;
       if (!info) {
@@ -935,7 +1074,7 @@ export const MediaControls = GObject.registerClass(
     _hideLyricsForPlayer(playerName) {
       this._getPlayerLyricsState(playerName).visible = false;
       this._stopLyricsSyncTimer();
-      this._showInArtSlot(this._albumArt);
+      this._setLyricsShown(false);
     }
 
     async _fetchLyricsForCurrentTrack() {
@@ -1002,6 +1141,8 @@ export const MediaControls = GObject.registerClass(
 
       this._lyricsClient?.destroy();
       this._lyricsClient = null;
+      this._hdCovers?.destroy();
+      this._hdCovers = null;
 
       if (this._repinId) {
         GLib.Source.remove(this._repinId);
@@ -1011,7 +1152,9 @@ export const MediaControls = GObject.registerClass(
       this._artSlot?.set_child(null);
       this._artSlot = null;
 
-      this._lyricsView?.destroy();
+      this._followAnchor(null);
+      this._lyricsFloat?.destroy();
+      this._lyricsFloat = null;
       this._lyricsView = null;
 
       this._albumArt?.destroy();

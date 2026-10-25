@@ -189,6 +189,22 @@ export function buildPopupPage(settings) {
   });
   popupPage.add(albumArtGroup);
 
+  const hdCoverRow = new Adw.SwitchRow({
+    title: _("Look Up HD Covers"),
+    subtitle: _(
+      "Browsers only share a small thumbnail. Search the iTunes catalogue " +
+        "for the high-resolution artwork (sends artist and title to Apple).",
+    ),
+    icon_name: "image-x-generic-symbolic",
+  });
+  settings.bind(
+    "hd-cover-lookup",
+    hdCoverRow,
+    "active",
+    Gio.SettingsBindFlags.DEFAULT,
+  );
+  albumArtGroup.add(hdCoverRow);
+
   const enableRotationRow = new Adw.SwitchRow({
     title: _("Enable Vinyl Record Rotation (Global Default)"),
     subtitle: _(

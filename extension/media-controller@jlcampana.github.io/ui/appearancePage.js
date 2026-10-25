@@ -308,7 +308,10 @@ function _buildFontGroup(cfg) {
 
   const sizeRow = new Adw.SpinRow({
     title: _("Font Size (px)"),
-    subtitle: `${sizeLower}–${sizeUpper} px`,
+    subtitle:
+      sizeLower === 0
+        ? _("0 = same size as the panel; up to %d px").format(sizeUpper)
+        : `${sizeLower}–${sizeUpper} px`,
     adjustment: new Gtk.Adjustment({
       lower: sizeLower,
       upper: sizeUpper,
@@ -353,7 +356,7 @@ export function buildAppearancePage(settings) {
     ),
     familyKey: "panel-font-family",
     sizeKey: "panel-font-size",
-    sizeLower: 8,
+    sizeLower: 0,
     sizeUpper: 24,
     boldKey: "panel-font-bold",
     colorKey: "panel-font-color",

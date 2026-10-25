@@ -91,15 +91,15 @@
     </key>
 
     <key name="panel-font-size" type="i">
-      <default>13</default>
-      <range min="8" max="24" />
+      <default>0</default>
+      <range min="0" max="24" />
       <summary>Panel label font size (px)</summary>
       <description
-            >Font size in pixels for the panel track/artist label</description>
+            >Font size in pixels for the panel track/artist label. 0 = same as the rest of the panel.</description>
     </key>
 
     <key name="panel-font-bold" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Panel label bold</summary>
       <description>Render the panel label text in bold weight</description>
     </key>
@@ -127,7 +127,7 @@
     </key>
 
     <key name="popup-title-font-size" type="i">
-      <default>16</default>
+      <default>18</default>
       <range min="8" max="32" />
       <summary>Popup title font size (px)</summary>
       <description>Font size in pixels for the popup track-title</description>
@@ -154,7 +154,7 @@
     </key>
 
     <key name="popup-artist-font-size" type="i">
-      <default>13</default>
+      <default>15</default>
       <range min="8" max="28" />
       <summary>Popup artist font size (px)</summary>
       <description>Font size in pixels for the popup artist label</description>
@@ -263,6 +263,13 @@
       <description>JSON-encoded list of player instance objects</description>
     </key>
 
+    <key name="hd-cover-lookup" type="b">
+      <default>true</default>
+      <summary>Look up HD covers</summary>
+      <description
+            >When a player only provides a small thumbnail (browsers), fetch the high-resolution artwork from the iTunes catalogue</description>
+    </key>
+
     <key name="immersive-cover" type="b">
       <default>true</default>
       <summary>Immersive cover</summary>
@@ -274,7 +281,7 @@
       <default>true</default>
       <summary>Gradient background behind lyrics</summary>
       <description
-            >In immersive mode, show a gradient taken from the cover colours behind the lyrics instead of the cover image</description>
+            >Tint the lyrics panel with a gradient taken from the cover colours</description>
     </key>
 
     <key name="cover-cache-version" type="i">
@@ -363,10 +370,10 @@
     </key>
 
     <key name="enable-lyrics" type="b">
-      <default>true</default>
+      <default>false</default>
       <summary>Enable synced lyrics</summary>
       <description
-            >Fetch and display time-synced lyrics from lrclib.net</description>
+            >Fetch time-synced lyrics from lrclib.net and show them in a small panel under the popup</description>
     </key>
 
     <key name="hide-default-player" type="b">

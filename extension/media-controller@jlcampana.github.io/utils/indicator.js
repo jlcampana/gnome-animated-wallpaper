@@ -278,6 +278,11 @@ export const MediaIndicator = GObject.registerClass(
         this._eventHandlers = null;
       }
 
+      if (this._uiUpdater) {
+        this._uiUpdater.destroy();
+        this._uiUpdater = null;
+      }
+
       if (this._playerHandlers) {
         this._playerHandlers.destroy();
         this._playerHandlers = null;

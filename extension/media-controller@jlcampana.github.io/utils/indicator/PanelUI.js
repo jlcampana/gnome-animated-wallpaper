@@ -29,13 +29,15 @@ function _labelWidth(settings) {
 }
 /** Build a CSS style string for the panel label from appearance settings. */
 function _panelLabelStyle(settings) {
-  const size   = settings.get_int("panel-font-size") || 13;
+  const size   = settings.get_int("panel-font-size");
   const bold   = settings.get_boolean("panel-font-bold");
   const family = (settings.get_string("panel-font-family") || "").trim();
   const color  = (settings.get_string("panel-font-color") || "").trim();
   const w      = _labelWidth(settings);
 
-  let style = `font-size: ${size}px; font-weight: ${bold ? "bold" : "normal"};`;
+  // Size 0 inherits the panel font, like the rest of the top bar
+  let style = `font-weight: ${bold ? "bold" : "normal"};`;
+  if (size) style += ` font-size: ${size}px;`;
   if (family) style += ` font-family: ${family};`;
   if (color)  style += ` color: ${color};`;
   style += ` max-width: ${w}px;`;
