@@ -4,6 +4,7 @@ import Cairo from "gi://cairo";
 import Soup from "gi://Soup";
 
 import { BUILTIN_THEMES } from "./builtinThemes.js";
+import { USER_THEMES_DIR } from "../../ui/themes/constants.js";
 import {
   fetchBytes,
   extractArchive,
@@ -96,12 +97,7 @@ export class ThemeEngine {
     this._reloadCancellable = null;
     this._session = new Soup.Session({ timeout: 30 });
     this.onThemesChanged = null;
-    this._userThemesDir = GLib.build_filenamev([
-      GLib.get_user_data_dir(),
-      "gnome-shell",
-      "extensions",
-      "Advanced-media-controller-themes",
-    ]);
+    this._userThemesDir = USER_THEMES_DIR;
 
     for (const theme of BUILTIN_THEMES) {
       this._themes.set(theme.id, {

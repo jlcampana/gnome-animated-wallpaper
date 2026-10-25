@@ -10,16 +10,12 @@ import {
   copyDirRecursive,
   rimraf,
 } from "./core/themeUtils.js";
+import { USER_THEMES_DIR, OLD_USER_THEMES_DIR } from "../ui/themes/constants.js";
 
 const MATRIX_ARCHIVE_URL =
   "https://codeberg.org/sanjai-shaarugesh/matrix/archive/main.zip";
 
-const THEMES_DIR = GLib.build_filenamev([
-  GLib.get_user_data_dir(),
-  "gnome-shell",
-  "extensions",
-  "Advanced-media-controller-themes",
-]);
+const THEMES_DIR = USER_THEMES_DIR;
 const SENTINEL = GLib.build_filenamev([
   THEMES_DIR,
   ".matrix-default-installed",
@@ -60,9 +56,29 @@ async function installMatrixTheme(cancellable) {
   }
 }
 
+// Moves the themes out of gnome-shell/extensions, where the shell tries to load them as an
+// extension ("Missing metadata.json").
+function migrateOldThemesDir() {
+  if (!GLib.file_test(OLD_USER_THEMES_DIR, GLib.FileTest.IS_DIR)) return;
+  if (GLib.file_test(USER_THEMES_DIR, GLib.FileTest.EXISTS)) return;
+  try {
+    GLib.mkdir_with_parents(GLib.path_get_dirname(USER_THEMES_DIR), 0o755);
+    Gio.File.new_for_path(OLD_USER_THEMES_DIR).move(
+      Gio.File.new_for_path(USER_THEMES_DIR),
+      Gio.FileCopyFlags.NONE,
+      null,
+      null,
+    );
+  } catch (e) {
+    console.error(`Could not move themes to ${USER_THEMES_DIR}: ${e.message}`);
+  }
+}
+
 // Returns a Gio.Cancellable, cancel it from disable()
 export function installDefaultThemesIfNeeded() {
   const cancellable = new Gio.Cancellable();
+
+  migrateOldThemesDir();
 
   if (!GLib.file_test(SENTINEL, GLib.FileTest.EXISTS)) {
     installMatrixTheme(cancellable).catch((e) => {

@@ -1,7 +1,13 @@
 import GLib from "gi://GLib";
 
 
+// Kept outside gnome-shell/extensions: the shell tries to load everything in there as an extension.
 export const USER_THEMES_DIR = GLib.build_filenamev([
+    GLib.get_user_data_dir(), "media-controller", "themes",
+]);
+
+// Where the original extension kept them (moved to USER_THEMES_DIR on enable).
+export const OLD_USER_THEMES_DIR = GLib.build_filenamev([
     GLib.get_user_data_dir(),
     "gnome-shell", "extensions", "Advanced-media-controller-themes",
 ]);
