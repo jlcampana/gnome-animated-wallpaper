@@ -1,7 +1,9 @@
 //! Gestor de descargas: el proceso `fondos-animados --gestor-descargas`, independiente de la
 //! ventana (si la app se cierra o se cae, sigue). Saca el trabajo de la cola (cola.rs): baja las
 //! descargas de una en una, en el orden de la cola, y las importa a la biblioteca, también de una
-//! en una (mientras importa una, ya está bajando la siguiente). Un cerrojo sobre un fichero
+//! en una (mientras importa una, ya está bajando la siguiente). Las conversiones (versiones de
+//! 30 fps y las del diálogo «Convertir») van aparte, también de una en una, para que una larga
+//! no deje esperando a las importaciones. Un cerrojo sobre un fichero
 //! impide que haya dos; cuando no queda nada que hacer, se cierra. La app lo arranca cuando hay
 //! trabajo y no está en marcha.
 //!
@@ -20,7 +22,8 @@ use std::time::{Duration, Instant};
 use gtk::gio;
 use gtk::prelude::*;
 
-use crate::cola::{self, Trabajo};
+use crate::cola::{self, TipoConversion, Trabajo};
+use crate::importar::Avance;
 use crate::{config, importar, red};
 
 /// Segundos sin nada que hacer antes de cerrarse.
@@ -169,6 +172,7 @@ pub fn ejecutar() -> ExitCode {
 
     let mut descarga: Hilo = None;
     let mut importacion: Hilo = None;
+    let mut conversion: Hilo = None;
     let mut ocioso = Instant::now();
     loop {
         if recoger(&con, &mut descarga) {
@@ -191,7 +195,17 @@ pub fn ejecutar() -> ExitCode {
                 }
             };
         }
-        if descarga.is_some() || importacion.is_some() {
+        if recoger(&con, &mut conversion) {
+            conversion = match cola::reclamar(&con, cola::POR_CONVERTIR, cola::CONVIRTIENDO) {
+                Ok(Some(t)) => Some((t.id, std::thread::spawn(move || convertir(t)))),
+                Ok(None) => None,
+                Err(e) => {
+                    registro!("{e}");
+                    None
+                }
+            };
+        }
+        if descarga.is_some() || importacion.is_some() || conversion.is_some() {
             ocioso = Instant::now();
         } else if ocioso.elapsed() > Duration::from_secs(ESPERA_ANTES_DE_SALIR) {
             // Se suelta el cerrojo y se mira otra vez: si la app ha encolado justo ahora (antes
@@ -316,7 +330,7 @@ fn extension_por_contenido(ruta: &Path) -> &'static str {
 }
 
 fn importar(t: Trabajo) {
-    let con = match cola::abrir() {
+    let mut con = match cola::abrir() {
         Ok(c) => c,
         Err(e) => return registro!("{e}"),
     };
@@ -326,10 +340,16 @@ fn importar(t: Trabajo) {
     };
     registro!("importando «{}»", t.nombre);
     let a = &t.ajustes;
-    let r = importar::importar(&fichero, &a.biblioteca, t.titulo.as_deref(), a.sin_audio, t.mover, a.optimizar, a.version_30);
+    let r = importar::importar(&fichero, &a.biblioteca, t.titulo.as_deref(), a.sin_audio, t.mover, a.optimizar);
     let resultado = match r {
-        Ok(r) => {
+        Ok(mut r) => {
             registro!("«{}» → {}", t.nombre, r.ruta.display());
+            if let Some(calidad) = a.version_30.filter(|_| importar::mas_de_30_fps(r.info.fps)) {
+                match cola::encolar_version_30(&mut con, &r.ruta, calidad, a) {
+                    Ok(_) => r.avisos.push(format!("su versión de 30 fps va a la cola (el original va a {:.0})", r.info.fps)),
+                    Err(e) => r.avisos.push(format!("no se pudo encolar la versión de 30 fps: {e}")),
+                }
+            }
             if t.usar {
                 if let Some(ajustes) = config::ajustes() {
                     let _ = ajustes.set_string("video", &r.ruta.to_string_lossy());
@@ -347,4 +367,109 @@ fn importar(t: Trabajo) {
     if let Err(e) = resultado {
         registro!("{e}");
     }
+}
+
+fn convertir(t: Trabajo) {
+    let con = match cola::abrir() {
+        Ok(c) => c,
+        Err(e) => return registro!("{e}"),
+    };
+    let (Some(c), Some(origen), Some(destino), Some(temporal)) =
+        (t.conversion.as_ref(), t.fichero.as_deref(), t.ruta.as_deref(), t.temporal_conversion())
+    else {
+        let _ = cola::fallo(&con, t.id, "conversión incompleta en la cola");
+        return;
+    };
+    if !origen.is_file() {
+        let _ = cola::fallo(&con, t.id, "el vídeo original ya no está");
+        return;
+    }
+    registro!("convirtiendo «{}» ({})", t.nombre, c.opciones.join(" "));
+    if let Some(dir) = destino.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut total = None;
+    let mut ultimo = Instant::now() - Duration::from_secs(1);
+    let r = importar::convertir_con_progreso(origen, &temporal, &c.opciones, &mut |avance| {
+        match avance {
+            Avance::Duracion(d) => total = Some((d * 1e6) as u64),
+            Avance::Codificador(enc) => {
+                let donde = if enc.starts_with("lib") { "CPU" } else { "GPU" };
+                let _ = cola::nota(&con, t.id, &format!("{enc} ({donde})"));
+            }
+            Avance::Reinicio => {
+                let _ = cola::nota(&con, t.id, "ha fallado el codificador; pruebo otro");
+            }
+            Avance::Hecho(s) => {
+                // Cada medio segundo: se apunta el progreso y se mira si la app pide cancelar.
+                if ultimo.elapsed() >= Duration::from_millis(500) {
+                    ultimo = Instant::now();
+                    let hecho = ((s * 1e6) as u64).min(total.unwrap_or(u64::MAX));
+                    match cola::progreso(&con, t.id, hecho, total) {
+                        Ok(Some(_)) => return false,
+                        Ok(None) => {}
+                        Err(e) => registro!("{e}"),
+                    }
+                }
+            }
+        }
+        true
+    });
+    let resultado = match r {
+        Ok(true) => terminar_conversion(&con, &t, c, origen, destino, &temporal),
+        Ok(false) => {
+            registro!("«{}» cancelada", t.nombre);
+            cola::pasar(&con, t.id, &[cola::CONVIRTIENDO], cola::CANCELADA).map(|_| ())
+        }
+        Err(e) => {
+            registro!("«{}»: {e}", t.nombre);
+            cola::fallo(&con, t.id, &e)
+        }
+    };
+    if let Err(e) = resultado {
+        registro!("{e}");
+    }
+}
+
+fn terminar_conversion(
+    con: &rusqlite::Connection,
+    t: &Trabajo,
+    c: &cola::Conversion,
+    origen: &Path,
+    destino: &Path,
+    temporal: &Path,
+) -> Result<(), String> {
+    // La de 30 fps sustituye a la que hubiera; una conversión nueva no pisa otro vídeo que haya
+    // aparecido con ese nombre mientras esperaba en la cola.
+    let final_ = if c.tipo == TipoConversion::Personalizada && !c.reemplazar && destino.exists() {
+        let base = destino.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        config::ruta_libre(destino.parent().unwrap_or(Path::new(".")), &base, "mp4")
+    } else {
+        destino.to_path_buf()
+    };
+    if c.reemplazar {
+        let _ = std::fs::remove_file(origen);
+    }
+    std::fs::rename(temporal, &final_).map_err(|e| e.to_string())?;
+    registro!("«{}» → {}", t.nombre, final_.display());
+
+    if let Some(ajustes) = config::ajustes() {
+        let actual = PathBuf::from(ajustes.string("video").as_str());
+        let usar = match c.tipo {
+            // Si es el fondo actual y toca la de 30, pasar a ella ya (como decide la extensión).
+            TipoConversion::Version30 => {
+                actual == origen
+                    && (ajustes.string("preferred-version") == "30fps"
+                        || (ajustes.boolean("battery-30fps") && config::con_bateria()))
+            }
+            TipoConversion::Personalizada => t.usar || (c.reemplazar && actual == origen),
+        };
+        if usar {
+            let _ = ajustes.set_string("video", &final_.to_string_lossy());
+            let _ = ajustes.set_boolean("enabled", true);
+            gio::Settings::sync();
+        }
+    }
+    let resumen = importar::info(&final_).map(|i| i.resumen()).unwrap_or_default();
+    cola::importada(con, t.id, &final_, &resumen, &[])
 }

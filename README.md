@@ -53,7 +53,7 @@ Dónde queda cada cosa:
 | `~/.cache/fondos-animados/` | miniaturas, vistas previas, descargas a medias y capacidades del hardware |
 | `~/Vídeos/Fondos animados/30 fps/` | versiones de 30 fps (mismo nombre que el original) |
 | `~/.local/share/fondos-animados/biblioteca.db` | SQLite con fps, resolución, códec… de cada vídeo (se rehace sola si se borra) |
-| `~/.local/share/fondos-animados/descargas.db` | SQLite con la cola de descargas (sobrevive a cierres y caídas) |
+| `~/.local/share/fondos-animados/descargas.db` | SQLite con la cola de descargas y conversiones (sobrevive a cierres y caídas) |
 | `~/.config/systemd/user/fondos-animados-descargas.service` | servicio de usuario del gestor de descargas |
 | `~/.local/share/fondos-animados/web/` | cookies y datos del navegador integrado |
 
@@ -81,7 +81,8 @@ Para comprobarlo: `fondo-animado-convertir --capacidades --forzar` (o la página
     con las flechas o escribe el número de la página a la que saltar (cada página sustituye a la
     anterior para no acumular memoria). Clic en un resultado: vista previa y descarga.
   - *Navegador*: WebKit con sesión propia; cualquier descarga se importa sola a la biblioteca.
-  - *Cola de descargas* (botón de la barra de título): ver [Cola de descargas](#cola-de-descargas).
+  - *Descargas y conversiones* (botón de la barra de título): ver [Cola de descargas y
+    conversiones](#cola-de-descargas-y-conversiones).
   - *Ajustes*: estado de la extensión, pausas, descargas, hardware detectado y estilo.
 - **Ajustes rápidos**: botón «Fondo animado» (activar/desactivar) con menú: pausar, elegir vídeo
   de la biblioteca, abrir la app.
@@ -98,9 +99,10 @@ Para comprobarlo: `fondo-animado-convertir --capacidades --forzar` (o la página
   fondo-animado ajuste cover     # cover | contain | fill
   ```
 
-### Cola de descargas
+### Cola de descargas y conversiones
 
-Lo que se descarga desde *Explorar* (y lo que se importa) entra en una cola guardada en SQLite.
+Lo que se descarga desde *Explorar*, lo que se importa y las conversiones (versiones de 30 fps y
+el diálogo *Convertir / recortar…*) entran en una cola guardada en SQLite.
 El trabajo lo hace el **gestor de descargas**, un proceso aparte (`fondos-animados
 --gestor-descargas`) que va como servicio de systemd de usuario
 (`fondos-animados-descargas.service`, lo instala y activa `install.sh`):
@@ -118,6 +120,11 @@ El trabajo lo hace el **gestor de descargas**, un proceso aparte (`fondos-animad
   **cancelar**, **reintentar** (si falló o se canceló) y **quitar** de la lista.
 - Un vídeo que ya está en la cola no se añade otra vez; si estaba con error o cancelado, se
   vuelve a intentar.
+- Las **conversiones** van aparte, también de una en una, para que una larga no deje esperando a
+  las importaciones. Su fila lleva un icono de cámara (las descargas, el de descarga; los
+  ficheros importados, el de abrir) y enseña el porcentaje y el codificador (GPU o CPU). Mientras
+  esperan se pueden pausar, reordenar o cancelar; en marcha, solo cancelar. Si el gestor se cae a
+  mitad, la conversión vuelve a empezar al arrancar otra vez. No hace falta dejar la app abierta.
 - Las descargas del *Navegador* las hace WebKit dentro de la app (se pierden si se cierra); al
   terminar, entran en la cola para importarse.
 
@@ -133,7 +140,7 @@ El trabajo lo hace el **gestor de descargas**, un proceso aparte (`fondos-animad
 4. Opcional (*Ajustes → Adaptar a la pantalla*): recodificar a la resolución de tu pantalla y al
    formato recomendado. Por defecto solo si la GPU puede codificar (con CPU tarda).
 5. Opcional (*Ajustes → Crear también la versión de 30 fps*): si el vídeo va a más de 30 fps,
-   se crea además su versión de 30.
+   su versión de 30 entra en la cola de conversiones.
 
 ### Versiones de 30 fps
 
@@ -143,8 +150,10 @@ original se conserva. La app y el menú de Ajustes rápidos enseñan una sola en
 (con la etiqueta «60 · 30 fps») y usan la versión elegida en *Ajustes → Versión que se usa de
 fondo* (clave `preferred-version`: `original` o `30fps`); al cambiarla, el fondo actual pasa a
 esa versión. El menú ⋮ de cada fondo permite usar una u otra, y crear o borrar la de 30 fps; el
-menú principal tiene «Crear versiones de 30 fps de toda la biblioteca» (pide confirmación,
-enseña el avance y se puede cancelar entre vídeo y vídeo).
+menú principal tiene «Crear versiones de 30 fps de toda la biblioteca» (pide confirmación). Todas
+van a la [cola](#cola-de-descargas-y-conversiones): se ve el avance de cada una, se pueden
+cancelar y siguen aunque se cierre la app. Al terminar, si es el fondo actual y toca la de 30,
+el fondo pasa a ella.
 
 Con *Ajustes → Usar la de 30 fps con batería* (clave `battery-30fps`), al desenchufar el portátil
 el fondo pasa a su versión de 30 fps (si la tiene) y al enchufarlo vuelve a la preferida. Lo
@@ -246,8 +255,13 @@ Fork de [Advanced Media Controller](https://codeberg.org/sanjai-shaarugesh/Advan
 - **Id propio**: `media-controller@jlcampana.github.io`, esquema
   `org.gnome.shell.extensions.media-controller` y dominio de traducciones `media-controller`,
   para que no la pise una actualización de la original. El instalador desactiva la original si
-  estaba activa (las dos a la vez pondrían dos controles en la barra). Los temas se siguen
-  guardando en la misma carpeta que la original, así que valen para las dos.
+  estaba activa (las dos a la vez pondrían dos controles en la barra).
+- **Carpeta de temas**: la original los guarda en
+  `~/.local/share/gnome-shell/extensions/Advanced-media-controller-themes/`, y GNOME Shell
+  intenta cargar como extensión todo lo que hay ahí (en cada inicio de sesión salía «Could not
+  load extension Advanced-media-controller-themes: Missing metadata.json»). El fork los guarda
+  en `~/.local/share/media-controller/themes/` y, al activarse, mueve allí los de la carpeta
+  antigua si aún no hay ninguno.
 - **Temporizadores huérfanos**: cuando GNOME Shell destruye la barra de progreso desde C (al
   cerrar el menú o abrir Actividades), no se llama a su `destroy()` de JS y el temporizador de
   la animación (cada 33 ms) seguía vivo para siempre, repintando un actor ya destruido. Cada tic

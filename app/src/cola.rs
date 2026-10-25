@@ -1,4 +1,5 @@
-//! Cola de descargas e importaciones (SQLite, en ~/.local/share/fondos-animados/descargas.db).
+//! Cola de descargas, importaciones y conversiones (SQLite, en
+//! ~/.local/share/fondos-animados/descargas.db).
 //! La comparten la app, que encola y pide cosas (pausar, cancelar, reordenar…), y el gestor de
 //! descargas (gestor.rs), un proceso aparte que hace el trabajo: si uno de los dos se cae, la
 //! cola sigue ahí. Los cambios de estado se hacen con UPDATE … WHERE estado = …, para que la app
@@ -6,6 +7,8 @@
 //!
 //! Estados: en_cola → descargando → por_importar → importando → lista, más pausada, error y
 //! cancelada. Los ficheros locales y los que baja el navegador integrado entran ya por_importar.
+//! Las conversiones (versiones de 30 fps y el diálogo «Convertir») van por_convertir →
+//! convirtiendo → lista: el origen está en «fichero» y el resultado irá a «ruta».
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,6 +22,8 @@ pub const DESCARGANDO: &str = "descargando";
 pub const PAUSADA: &str = "pausada";
 pub const POR_IMPORTAR: &str = "por_importar";
 pub const IMPORTANDO: &str = "importando";
+pub const POR_CONVERTIR: &str = "por_convertir";
+pub const CONVIRTIENDO: &str = "convirtiendo";
 pub const LISTA: &str = "lista";
 pub const ERROR: &str = "error";
 pub const CANCELADA: &str = "cancelada";
@@ -56,6 +61,38 @@ pub struct Trabajo {
     /// Cuándo avisó la app del resultado (0: todavía no).
     pub avisada: i64,
     pub ajustes: AjustesImportar,
+    pub conversion: Option<Conversion>,
+}
+
+/// Qué conversión hacer con fondo-animado-convertir.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Conversion {
+    pub tipo: TipoConversion,
+    /// Opciones del script (sin --progreso, el origen ni el destino).
+    pub opciones: Vec<String>,
+    /// Borrar el origen al terminar (el resultado ocupa su sitio, en .mp4).
+    pub reemplazar: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TipoConversion {
+    /// La versión de 30 fps de un vídeo de la biblioteca (se sustituye si ya existía).
+    Version30,
+    /// La del diálogo «Convertir».
+    Personalizada,
+}
+
+impl TipoConversion {
+    fn clave(self) -> &'static str {
+        match self {
+            TipoConversion::Version30 => "30fps",
+            TipoConversion::Personalizada => "personalizada",
+        }
+    }
+
+    fn de_clave(t: &str) -> TipoConversion {
+        if t == "30fps" { TipoConversion::Version30 } else { TipoConversion::Personalizada }
+    }
 }
 
 /// Cómo importar: se decide al encolar (el gestor no tiene pantalla ni detecta el hardware).
@@ -77,10 +114,19 @@ impl Trabajo {
         carpeta().join(format!("descarga-{}.part", self.id))
     }
 
+    /// Fichero donde va escribiendo una conversión (se renombra a «ruta» al acabar).
+    pub fn temporal_conversion(&self) -> Option<PathBuf> {
+        self.conversion.as_ref()?;
+        Some(self.ruta.as_ref()?.with_extension("convirtiendo.mp4"))
+    }
+
     /// Ficheros nuestros que sobran si el trabajo se cancela o se quita sin terminar.
     fn borrar_ficheros(&self) {
         if self.url.is_some() {
             let _ = std::fs::remove_file(self.temporal());
+        }
+        if let Some(t) = self.temporal_conversion() {
+            let _ = std::fs::remove_file(t);
         }
         if self.mover && self.estado != LISTA {
             if let Some(f) = &self.fichero {
@@ -139,16 +185,34 @@ fn abrir_en(ruta: &Path) -> rusqlite::Result<Connection> {
         );
         CREATE INDEX IF NOT EXISTS trabajos_clave ON trabajos (clave);",
     )?;
+    // Columnas añadidas después (las bases de antes no las tienen).
+    let mut c = con.prepare("SELECT name FROM pragma_table_info('trabajos')")?;
+    let columnas: Vec<String> = c.query_map([], |f| f.get(0))?.collect::<rusqlite::Result<_>>()?;
+    drop(c);
+    for (columna, tipo) in [("conversion", "TEXT"), ("opciones", "TEXT"), ("reemplazar", "INTEGER NOT NULL DEFAULT 0")] {
+        if !columnas.iter().any(|c| c == columna) {
+            con.execute_batch(&format!("ALTER TABLE trabajos ADD COLUMN {columna} {tipo}"))?;
+        }
+    }
     Ok(con)
 }
 
 const COLUMNAS: &str = "id, clave, nombre, titulo, url, referer, fichero, mover, usar, estado, peticion, hecho,
-    total, mensaje, ruta, avisos, avisada, biblioteca, sin_audio, opt_ancho, opt_alto, version_30";
+    total, mensaje, ruta, avisos, avisada, biblioteca, sin_audio, opt_ancho, opt_alto, version_30, conversion,
+    opciones, reemplazar";
 
 fn de_fila(f: &Row) -> rusqlite::Result<Trabajo> {
     let ancho: Option<i32> = f.get(19)?;
     let alto: Option<i32> = f.get(20)?;
     let avisos: Option<String> = f.get(15)?;
+    let conversion = f.get::<_, Option<String>>(22)?.map(|tipo| -> rusqlite::Result<Conversion> {
+        let opciones: Option<String> = f.get(23)?;
+        Ok(Conversion {
+            tipo: TipoConversion::de_clave(&tipo),
+            opciones: opciones.and_then(|o| serde_json::from_str(&o).ok()).unwrap_or_default(),
+            reemplazar: f.get(24)?,
+        })
+    });
     Ok(Trabajo {
         id: f.get(0)?,
         clave: f.get(1)?,
@@ -173,6 +237,7 @@ fn de_fila(f: &Row) -> rusqlite::Result<Trabajo> {
             optimizar: ancho.zip(alto),
             version_30: f.get(21)?,
         },
+        conversion: conversion.transpose()?,
     })
 }
 
@@ -195,8 +260,8 @@ pub fn leer(con: &Connection, id: i64) -> Result<Option<Trabajo>, String> {
 /// ¿Hay algo que el gestor tenga que hacer?
 pub fn hay_trabajo(con: &Connection) -> Result<bool, String> {
     con.query_row(
-        "SELECT EXISTS (SELECT 1 FROM trabajos WHERE estado IN (?1, ?2, ?3, ?4))",
-        params![EN_COLA, DESCARGANDO, POR_IMPORTAR, IMPORTANDO],
+        "SELECT EXISTS (SELECT 1 FROM trabajos WHERE estado IN (?1, ?2, ?3, ?4, ?5, ?6))",
+        params![EN_COLA, DESCARGANDO, POR_IMPORTAR, IMPORTANDO, POR_CONVERTIR, CONVIRTIENDO],
         |f| f.get(0),
     )
     .map_err(texto)
@@ -221,6 +286,9 @@ pub struct Nuevo<'a> {
     pub mover: bool,
     pub usar: bool,
     pub ajustes: &'a AjustesImportar,
+    /// Con conversión: `fichero` es el origen y `destino`, dónde dejar el resultado.
+    pub conversion: Option<&'a Conversion>,
+    pub destino: Option<&'a Path>,
 }
 
 /// Al final de la cola, salvo que ya esté en ella sin terminar.
@@ -235,19 +303,28 @@ pub fn encolar(con: &mut Connection, n: &Nuevo) -> Result<Encolado, String> {
         .optional()
         .map_err(texto)?;
     if let Some((id, estado)) = previo {
-        drop(tx);
         if estado == ERROR || estado == CANCELADA {
+            // Una conversión se reintenta con las opciones de ahora (p. ej. otra calidad).
+            if let Some(c) = n.conversion {
+                tx.execute(
+                    "UPDATE trabajos SET opciones = ?1, reemplazar = ?2 WHERE id = ?3",
+                    params![serde_json::to_string(&c.opciones).unwrap_or_default(), c.reemplazar, id],
+                )
+                .map_err(texto)?;
+            }
+            tx.commit().map_err(texto)?;
             reintentar(con, id)?;
             return Ok(Encolado::Reintentado);
         }
+        drop(tx);
         return Ok(Encolado::YaEstaba);
     }
     let a = n.ajustes;
     tx.execute(
         "INSERT INTO trabajos (clave, nombre, titulo, url, referer, fichero, mover, usar, orden, estado,
-            biblioteca, sin_audio, opt_ancho, opt_alto, version_30, creada)
+            biblioteca, sin_audio, opt_ancho, opt_alto, version_30, creada, ruta, conversion, opciones, reemplazar)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, (SELECT COALESCE(MAX(orden), 0) + 1 FROM trabajos), ?9,
-            ?10, ?11, ?12, ?13, ?14, ?15)",
+            ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             n.clave,
             n.nombre,
@@ -257,18 +334,61 @@ pub fn encolar(con: &mut Connection, n: &Nuevo) -> Result<Encolado, String> {
             n.fichero.map(|f| f.to_string_lossy().into_owned()),
             n.mover,
             n.usar,
-            if n.url.is_some() { EN_COLA } else { POR_IMPORTAR },
+            if n.conversion.is_some() {
+                POR_CONVERTIR
+            } else if n.url.is_some() {
+                EN_COLA
+            } else {
+                POR_IMPORTAR
+            },
             a.biblioteca.to_string_lossy(),
             a.sin_audio,
             a.optimizar.map(|o| o.0),
             a.optimizar.map(|o| o.1),
             a.version_30,
             ahora(),
+            n.destino.map(|d| d.to_string_lossy().into_owned()),
+            n.conversion.map(|c| c.tipo.clave()),
+            n.conversion.map(|c| serde_json::to_string(&c.opciones).unwrap_or_default()),
+            n.conversion.is_some_and(|c| c.reemplazar),
         ],
     )
     .map_err(texto)?;
     tx.commit().map_err(texto)?;
     Ok(Encolado::Nuevo)
+}
+
+/// La versión de 30 fps de un vídeo de la biblioteca, al final de la cola (sustituye a la que
+/// hubiera al terminar).
+pub fn encolar_version_30(
+    con: &mut Connection,
+    original: &Path,
+    calidad: i32,
+    ajustes: &AjustesImportar,
+) -> Result<Encolado, String> {
+    let conversion = Conversion {
+        tipo: TipoConversion::Version30,
+        opciones: crate::importar::opciones_version_30(calidad),
+        reemplazar: false,
+    };
+    let clave = format!("30fps:{}", original.display());
+    let nombre = original.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    encolar(
+        con,
+        &Nuevo {
+            clave: &clave,
+            nombre: &nombre,
+            titulo: None,
+            url: None,
+            referer: None,
+            fichero: Some(original),
+            mover: false,
+            usar: false,
+            ajustes,
+            conversion: Some(&conversion),
+            destino: Some(&config::ruta_version_30(original)),
+        },
+    )
 }
 
 /// Cambia el estado solo si sigue en uno de `desde`. Devuelve si lo ha cambiado.
@@ -284,7 +404,8 @@ pub fn pasar(con: &Connection, id: i64, desde: &[&str], a: &str) -> Result<bool,
 }
 
 pub fn pausar(con: &Connection, id: i64) -> Result<(), String> {
-    if !pasar(con, id, &[EN_COLA], PAUSADA)? {
+    // Una conversión en marcha no se puede pausar (solo cancelar).
+    if !pasar(con, id, &[EN_COLA, POR_CONVERTIR], PAUSADA)? {
         // En marcha: se lo pide al gestor, que para cuando lea la petición.
         con.execute(
             "UPDATE trabajos SET peticion = ?1 WHERE id = ?2 AND estado = ?3 AND url IS NOT NULL",
@@ -296,17 +417,23 @@ pub fn pausar(con: &Connection, id: i64) -> Result<(), String> {
 }
 
 pub fn reanudar(con: &Connection, id: i64) -> Result<(), String> {
-    pasar(con, id, &[PAUSADA], EN_COLA).map(|_| ())
+    con.execute(
+        "UPDATE trabajos SET estado = CASE WHEN conversion IS NULL THEN ?1 ELSE ?2 END, peticion = NULL
+         WHERE id = ?3 AND estado = ?4",
+        params![EN_COLA, POR_CONVERTIR, id, PAUSADA],
+    )
+    .map_err(texto)?;
+    Ok(())
 }
 
 pub fn cancelar(con: &Connection, id: i64) -> Result<(), String> {
     let Some(t) = leer(con, id)? else { return Ok(()) };
-    if pasar(con, id, &[EN_COLA, PAUSADA, POR_IMPORTAR], CANCELADA)? {
+    if pasar(con, id, &[EN_COLA, PAUSADA, POR_IMPORTAR, POR_CONVERTIR], CANCELADA)? {
         t.borrar_ficheros();
     } else {
         con.execute(
-            "UPDATE trabajos SET peticion = ?1 WHERE id = ?2 AND estado = ?3",
-            params![PEDIR_CANCELACION, id, DESCARGANDO],
+            "UPDATE trabajos SET peticion = ?1 WHERE id = ?2 AND estado IN (?3, ?4)",
+            params![PEDIR_CANCELACION, id, DESCARGANDO, CONVIRTIENDO],
         )
         .map_err(texto)?;
     }
@@ -314,10 +441,17 @@ pub fn cancelar(con: &Connection, id: i64) -> Result<(), String> {
 }
 
 /// Vuelve a la cola un trabajo con error o cancelado: a importar si el fichero sigue ahí, y si
-/// no, a descargar (sigue donde se quedó, si queda algo bajado).
+/// no, a descargar (sigue donde se quedó, si queda algo bajado). Las conversiones, a convertir
+/// otra vez desde el principio.
 pub fn reintentar(con: &Connection, id: i64) -> Result<(), String> {
     let Some(t) = leer(con, id)? else { return Ok(()) };
-    let a = if t.fichero.as_deref().is_some_and(Path::is_file) {
+    let a = if t.conversion.is_some() {
+        if !t.fichero.as_deref().is_some_and(Path::is_file) {
+            return Err("el vídeo original ya no está".into());
+        }
+        con.execute("UPDATE trabajos SET hecho = 0, total = NULL WHERE id = ?1", [id]).map_err(texto)?;
+        POR_CONVERTIR
+    } else if t.fichero.as_deref().is_some_and(Path::is_file) {
         POR_IMPORTAR
     } else if t.url.is_some() {
         con.execute("UPDATE trabajos SET fichero = NULL WHERE id = ?1", [id]).map_err(texto)?;
@@ -396,7 +530,11 @@ pub fn recuperar(con: &Connection) -> Result<(), String> {
          UPDATE trabajos SET estado = '{CANCELADA}', peticion = NULL
             WHERE estado = '{DESCARGANDO}' AND peticion = '{PEDIR_CANCELACION}';
          UPDATE trabajos SET estado = '{EN_COLA}', peticion = NULL WHERE estado = '{DESCARGANDO}';
-         UPDATE trabajos SET estado = '{POR_IMPORTAR}' WHERE estado = '{IMPORTANDO}';"
+         UPDATE trabajos SET estado = '{POR_IMPORTAR}' WHERE estado = '{IMPORTANDO}';
+         UPDATE trabajos SET estado = '{CANCELADA}', peticion = NULL
+            WHERE estado = '{CONVIRTIENDO}' AND peticion = '{PEDIR_CANCELACION}';
+         UPDATE trabajos SET estado = '{POR_CONVERTIR}', peticion = NULL, hecho = 0, total = NULL
+            WHERE estado = '{CONVIRTIENDO}';"
     ))
     .map_err(texto)?;
     for t in listar(con)?.into_iter().filter(|t| t.estado == CANCELADA) {
@@ -448,6 +586,12 @@ pub fn fallo(con: &Connection, id: i64, error: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Nota sobre un trabajo en marcha (con qué codificador va una conversión).
+pub fn nota(con: &Connection, id: i64, nota: &str) -> Result<(), String> {
+    con.execute("UPDATE trabajos SET mensaje = ?1 WHERE id = ?2", params![nota, id]).map_err(texto)?;
+    Ok(())
+}
+
 pub fn importada(con: &Connection, id: i64, ruta: &Path, resumen: &str, avisos: &[String]) -> Result<(), String> {
     con.execute(
         "UPDATE trabajos SET estado = ?1, ruta = ?2, mensaje = ?3, avisos = ?4, avisada = 0, fichero = NULL
@@ -484,6 +628,8 @@ mod pruebas {
             mover: true,
             usar: false,
             ajustes: a,
+            conversion: None,
+            destino: None,
         }
     }
 
@@ -542,6 +688,85 @@ mod pruebas {
         assert_eq!(leer(&con, t.id).unwrap().unwrap().estado, PAUSADA);
         assert_eq!(leer(&con, t2.id).unwrap().unwrap().estado, EN_COLA);
         assert!(hay_trabajo(&con).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conversiones() {
+        let (mut con, dir) = con();
+        let a = ajustes();
+        let original = dir.join("rápido.mp4");
+        std::fs::write(&original, b"x").unwrap();
+        encolar(&mut con, &web("a", &a)).unwrap();
+        assert_eq!(encolar_version_30(&mut con, &original, 28, &a).unwrap(), Encolado::Nuevo);
+        assert_eq!(encolar_version_30(&mut con, &original, 28, &a).unwrap(), Encolado::YaEstaba);
+        let t = listar(&con).unwrap().pop().unwrap();
+        assert_eq!(t.estado, POR_CONVERTIR);
+        assert_eq!(t.ruta.as_deref(), Some(dir.join("30 fps").join("rápido.mp4").as_path()));
+        let c = t.conversion.clone().unwrap();
+        assert_eq!(c.tipo, TipoConversion::Version30);
+        assert_eq!(c.opciones, ["-f", "30", "-q", "28"]);
+        assert_eq!(t.temporal_conversion().unwrap(), dir.join("30 fps").join("rápido.convirtiendo.mp4"));
+
+        // Las descargas no se llevan las conversiones, ni al revés.
+        assert_eq!(reclamar(&con, EN_COLA, DESCARGANDO).unwrap().unwrap().clave, "a");
+        assert!(reclamar(&con, EN_COLA, DESCARGANDO).unwrap().is_none());
+
+        // En espera se pausa y se reanuda como conversión.
+        pausar(&con, t.id).unwrap();
+        assert_eq!(leer(&con, t.id).unwrap().unwrap().estado, PAUSADA);
+        reanudar(&con, t.id).unwrap();
+        assert_eq!(leer(&con, t.id).unwrap().unwrap().estado, POR_CONVERTIR);
+
+        // En marcha: cancelar es una petición; si el gestor se cae, al volver la respeta.
+        let t = reclamar(&con, POR_CONVERTIR, CONVIRTIENDO).unwrap().unwrap();
+        pausar(&con, t.id).unwrap(); // no hace nada
+        assert_eq!(progreso(&con, t.id, 1, Some(2)).unwrap(), None);
+        cancelar(&con, t.id).unwrap();
+        assert_eq!(progreso(&con, t.id, 1, Some(2)).unwrap().as_deref(), Some(PEDIR_CANCELACION));
+        recuperar(&con).unwrap();
+        assert_eq!(leer(&con, t.id).unwrap().unwrap().estado, CANCELADA);
+
+        // Otra vez a la cola, con otra calidad: el mismo trabajo, con las opciones nuevas.
+        assert_eq!(encolar_version_30(&mut con, &original, 24, &a).unwrap(), Encolado::Reintentado);
+        let t = leer(&con, t.id).unwrap().unwrap();
+        assert_eq!((t.estado.as_str(), t.conversion.unwrap().opciones[3].as_str()), (POR_CONVERTIR, "24"));
+
+        // Si el gestor se cae a mitad de una conversión, vuelve a empezar.
+        reclamar(&con, POR_CONVERTIR, CONVIRTIENDO).unwrap().unwrap();
+        recuperar(&con).unwrap();
+        assert_eq!(leer(&con, t.id).unwrap().unwrap().estado, POR_CONVERTIR);
+        assert!(hay_trabajo(&con).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Una base de antes de las conversiones gana sus columnas al abrirla.
+    #[test]
+    fn base_antigua() {
+        let dir = std::env::temp_dir().join(format!("fondos-prueba-cola-antigua-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ruta = dir.join("cola.db");
+        Connection::open(&ruta)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE trabajos (id INTEGER PRIMARY KEY AUTOINCREMENT, clave TEXT NOT NULL,
+                    nombre TEXT NOT NULL, titulo TEXT, url TEXT, referer TEXT, fichero TEXT,
+                    mover INTEGER NOT NULL, usar INTEGER NOT NULL DEFAULT 0, orden INTEGER NOT NULL,
+                    estado TEXT NOT NULL, peticion TEXT, hecho INTEGER NOT NULL DEFAULT 0, total INTEGER,
+                    mensaje TEXT, ruta TEXT, avisos TEXT, avisada INTEGER NOT NULL DEFAULT 0,
+                    biblioteca TEXT NOT NULL, sin_audio INTEGER NOT NULL, opt_ancho INTEGER,
+                    opt_alto INTEGER, version_30 INTEGER, creada INTEGER NOT NULL);
+                 INSERT INTO trabajos (clave, nombre, mover, orden, estado, biblioteca, sin_audio, creada)
+                    VALUES ('a', 'a', 1, 1, 'en_cola', '/tmp/b', 1, 0);",
+            )
+            .unwrap();
+        let mut con = abrir_en(&ruta).unwrap();
+        assert_eq!(listar(&con).unwrap()[0].conversion, None);
+        encolar_version_30(&mut con, Path::new("/tmp/b/x.mp4"), 28, &ajustes()).unwrap();
+        assert!(listar(&con).unwrap()[1].conversion.is_some());
+        drop(con);
+        abrir_en(&ruta).unwrap(); // y abrirla otra vez no falla
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

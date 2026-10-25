@@ -11,6 +11,7 @@ use gtk::{gio, glib};
 use crate::contexto::{self, Contexto};
 use crate::descargas::Descargas;
 use crate::fuentes::{self, Fuente, Resultado};
+use crate::previa::Previa;
 use crate::{config, red};
 
 pub struct Explorar {
@@ -313,11 +314,9 @@ impl Explorar {
 
     fn detalle(self: &Rc<Self>, r: Resultado) {
         let fuente = fuente_actual(&self.fuente);
-        let video = gtk::Video::builder()
-            .autoplay(true)
-            .loop_(true)
-            .height_request(300)
-            .build();
+        let video = gtk::Picture::builder().content_fit(gtk::ContentFit::Cover).height_request(300).build();
+        let reproductor: Rc<RefCell<Option<Previa>>> = Rc::default();
+        let cerrado = Rc::new(Cell::new(false));
         let imagen = gtk::Picture::builder().content_fit(gtk::ContentFit::Cover).height_request(300).build();
         contexto::cargar_miniatura_remota(&imagen, &r.miniatura, fuente.web());
         let previa = gtk::Stack::builder().css_classes(["card"]).overflow(gtk::Overflow::Hidden).build();
@@ -380,8 +379,12 @@ impl Explorar {
             .build();
         {
             // Al cerrar, fuera el vídeo de la vista previa.
-            let video = video.clone();
-            dialogo.connect_closed(move |_| video.set_file(None::<&gio::File>));
+            let reproductor = reproductor.clone();
+            let cerrado = cerrado.clone();
+            dialogo.connect_closed(move |_| {
+                cerrado.set(true);
+                reproductor.take();
+            });
         }
         {
             let ctx = self.ctx.clone();
@@ -464,12 +467,12 @@ impl Explorar {
                 .await
                 .ok()
                 .flatten();
-                if let (Some(ruta), Some(_)) = (ruta, d.upgrade()) {
-                    video.set_filename(Some(&ruta));
-                    if let Some(m) = video.media_stream() {
-                        m.set_muted(true);
+                // Si el diálogo se cerró mientras se bajaba, ya no se reproduce.
+                if let Some(ruta) = ruta.filter(|_| !cerrado.get()) {
+                    if let Some(p) = Previa::new(&ruta, &video) {
+                        reproductor.replace(Some(p));
+                        previa.set_visible_child_name("video");
                     }
-                    previa.set_visible_child_name("video");
                 }
             }
         });

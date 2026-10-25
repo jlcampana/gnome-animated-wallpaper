@@ -1,5 +1,6 @@
-//! Cola de descargas en la ventana: un botón en la barra de título con la lista. El trabajo lo
-//! hace el gestor de descargas (gestor.rs), un proceso aparte; aquí se encola, se le piden cosas
+//! Cola de descargas y conversiones en la ventana: un botón en la barra de título con la lista.
+//! El trabajo lo hace el gestor de descargas (gestor.rs), un proceso aparte; aquí se encola
+//! (descargas, ficheros a importar, versiones de 30 fps, conversiones), se le piden cosas
 //! (pausar, reanudar, subir, bajar, cancelar, reintentar, quitar) y se enseña cómo va leyendo la
 //! cola (cola.rs) cada medio segundo. Las descargas del navegador integrado las hace WebKit
 //! dentro de la app; al acabar, su fichero entra en la cola para importarlo.
@@ -13,7 +14,7 @@ use adw::prelude::*;
 use gtk::glib;
 use rusqlite::Connection;
 
-use crate::cola::{self, Encolado, Trabajo};
+use crate::cola::{self, Conversion, Encolado, TipoConversion, Trabajo};
 use crate::contexto::Contexto;
 use crate::{config, gestor};
 
@@ -35,6 +36,7 @@ pub struct Descargas {
 /// Los controles de una fila de la lista.
 struct Fila {
     fila: gtk::ListBoxRow,
+    icono: gtk::Image,
     nombre: gtk::Label,
     barra: gtk::ProgressBar,
     texto: gtk::Label,
@@ -68,8 +70,28 @@ fn boton(icono: &str, ayuda: &str) -> gtk::Button {
         .build()
 }
 
-/// Nombre, barra y texto de estado; los botones van a la derecha.
-fn caja_fila(nombre: &gtk::Label, barra: &gtk::ProgressBar, texto: &gtk::Label, botones: &[&gtk::Button]) -> gtk::Box {
+const ICONO_DESCARGA: &str = "folder-download-symbolic";
+const ICONO_IMPORTACION: &str = "document-open-symbolic";
+const ICONO_CONVERSION: &str = "camera-video-symbolic";
+
+/// Qué es un trabajo, por el icono de su fila.
+fn icono(t: &Trabajo) -> (&'static str, &'static str) {
+    match (&t.conversion, &t.url) {
+        (Some(c), _) if c.tipo == TipoConversion::Version30 => (ICONO_CONVERSION, "Versión de 30 fps"),
+        (Some(_), _) => (ICONO_CONVERSION, "Conversión"),
+        (None, Some(_)) => (ICONO_DESCARGA, "Descarga"),
+        (None, None) => (ICONO_IMPORTACION, "Importación"),
+    }
+}
+
+/// Icono, nombre, barra y texto de estado; los botones van a la derecha.
+fn caja_fila(
+    icono: &gtk::Image,
+    nombre: &gtk::Label,
+    barra: &gtk::ProgressBar,
+    texto: &gtk::Label,
+    botones: &[&gtk::Button],
+) -> gtk::Box {
     let textos = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).hexpand(true).build();
     textos.append(nombre);
     textos.append(barra);
@@ -81,6 +103,10 @@ fn caja_fila(nombre: &gtk::Label, barra: &gtk::ProgressBar, texto: &gtk::Label, 
         .margin_start(10)
         .margin_end(6)
         .build();
+    icono.set_valign(gtk::Align::Center);
+    icono.set_margin_end(8);
+    icono.add_css_class("dim-label");
+    caja.append(icono);
     caja.append(&textos);
     for b in botones {
         caja.append(*b);
@@ -117,6 +143,26 @@ fn tamano(hecho: u64, total: Option<u64>) -> String {
 /// Texto de estado de un trabajo.
 fn describir(t: &Trabajo) -> String {
     let descarga = t.url.is_some();
+    if let Some(c) = &t.conversion {
+        let que = match c.tipo {
+            TipoConversion::Version30 => "Creando la versión de 30 fps",
+            TipoConversion::Personalizada => "Convirtiendo",
+        };
+        match t.estado.as_str() {
+            cola::POR_CONVERTIR => return "En cola para convertir".into(),
+            cola::PAUSADA => return "En pausa".into(),
+            cola::CONVIRTIENDO if t.peticion.is_some() => return "Cancelando…".into(),
+            cola::CONVIRTIENDO => {
+                let mut partes = vec![format!("{que}…")];
+                if let Some(total) = t.total.filter(|t| *t > 0) {
+                    partes.push(format!("{:.0} %", t.hecho as f64 * 100.0 / total as f64));
+                }
+                partes.extend(t.mensaje.clone());
+                return partes.join(" · ");
+            }
+            _ => {}
+        }
+    }
     match t.estado.as_str() {
         cola::EN_COLA if t.hecho > 0 => format!("En cola · {}", tamano(t.hecho, t.total)),
         cola::EN_COLA => "En cola".into(),
@@ -150,7 +196,7 @@ impl Descargas {
             .css_classes(["boxed-list"])
             .visible(false)
             .build();
-        let titulo = gtk::Label::builder().label("Cola de descargas").xalign(0.0).hexpand(true).css_classes(["heading"]).build();
+        let titulo = gtk::Label::builder().label("Descargas y conversiones").xalign(0.0).hexpand(true).css_classes(["heading"]).build();
         let limpiar = gtk::Button::builder()
             .label("Quitar terminadas")
             .css_classes(["flat"])
@@ -173,8 +219,8 @@ impl Descargas {
         caja.append(&marco);
         let popover = gtk::Popover::builder().child(&caja).build();
         let boton = gtk::MenuButton::builder()
-            .icon_name("folder-download-symbolic")
-            .tooltip_text("Descargas")
+            .icon_name(ICONO_DESCARGA)
+            .tooltip_text("Descargas y conversiones")
             .popover(&popover)
             .visible(false)
             .build();
@@ -242,6 +288,8 @@ impl Descargas {
                     mover: true,
                     usar: usar_al_terminar,
                     ajustes: &ajustes,
+                    conversion: None,
+                    destino: None,
                 },
             )
         });
@@ -266,10 +314,69 @@ impl Descargas {
                     mover,
                     usar: false,
                     ajustes: &ajustes,
+                    conversion: None,
+                    destino: None,
                 },
             )
         });
         self.avisar_encolado(nombre, r);
+    }
+
+    /// Versiones de 30 fps de vídeos de la biblioteca, a la cola (con la calidad de Ajustes).
+    pub fn crear_versiones_30(self: &Rc<Self>, originales: Vec<PathBuf>) {
+        let ajustes = self.ajustes_importar(None);
+        let calidad = self.ctx.calidad_30();
+        if let [original] = originales.as_slice() {
+            let r = self.con(|c| cola::encolar_version_30(c, original, calidad, &ajustes));
+            let nombre = format!("{} (30 fps)", original.file_stem().unwrap_or_default().to_string_lossy());
+            return self.avisar_encolado(&nombre, r);
+        }
+        let (mut nuevas, mut ya, mut errores) = (0, 0, 0);
+        for original in &originales {
+            match self.con(|c| cola::encolar_version_30(c, original, calidad, &ajustes)) {
+                Ok(Encolado::YaEstaba) => ya += 1,
+                Ok(_) => nuevas += 1,
+                Err(e) => {
+                    crate::depurar!("{e}");
+                    errores += 1;
+                }
+            }
+        }
+        let mut texto = format!("{nuevas} versión(es) de 30 fps añadidas a la cola");
+        if ya > 0 {
+            texto.push_str(&format!("; {ya} ya estaban"));
+        }
+        if errores > 0 {
+            texto.push_str(&format!("; {errores} con errores"));
+        }
+        self.ctx.aviso(&texto);
+        self.refrescar();
+    }
+
+    /// Conversión del diálogo «Convertir», a la cola.
+    pub fn convertir(self: &Rc<Self>, origen: &Path, destino: &Path, conversion: Conversion, usar: bool) {
+        let ajustes = self.ajustes_importar(None);
+        let clave = format!("convertir:{}", destino.display());
+        let nombre = destino.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let r = self.con(|c| {
+            cola::encolar(
+                c,
+                &cola::Nuevo {
+                    clave: &clave,
+                    nombre: &nombre,
+                    titulo: None,
+                    url: None,
+                    referer: None,
+                    fichero: Some(origen),
+                    mover: false,
+                    usar,
+                    ajustes: &ajustes,
+                    conversion: Some(&conversion),
+                    destino: Some(destino),
+                },
+            )
+        });
+        self.avisar_encolado(&nombre, r);
     }
 
     fn ajustes_importar(&self, optimizar: Option<(i32, i32)>) -> cola::AjustesImportar {
@@ -283,7 +390,7 @@ impl Descargas {
 
     fn avisar_encolado(self: &Rc<Self>, nombre: &str, r: Result<Encolado, String>) {
         match r {
-            Ok(Encolado::Nuevo) => self.ctx.aviso(&format!("«{nombre}» añadido a la cola de descargas")),
+            Ok(Encolado::Nuevo) => self.ctx.aviso(&format!("«{nombre}» añadido a la cola")),
             Ok(Encolado::Reintentado) => self.ctx.aviso(&format!("«{nombre}» ya estaba en la cola: se vuelve a intentar")),
             Ok(Encolado::YaEstaba) => self.ctx.aviso(&format!("«{nombre}» ya está en la cola")),
             Err(e) => self.ctx.aviso(&e),
@@ -334,14 +441,18 @@ impl Descargas {
             if let Err(e) = self.con(|c| cola::marcar_avisada(c, t.id)) {
                 crate::depurar!("{e}");
             }
+            let version_30 = t.conversion.as_ref().is_some_and(|c| c.tipo == TipoConversion::Version30);
             if t.estado == cola::LISTA {
                 self.ctx.biblioteca_cambiada();
-                if let Some(ruta) = &t.ruta {
+                if version_30 {
+                    self.ctx.aviso(&format!("Versión de 30 fps de «{}» lista", t.nombre));
+                } else if let Some(ruta) = &t.ruta {
                     self.ctx.aviso_importado(ruta, &t.avisos);
                 }
             } else {
                 let e = t.mensaje.as_deref().unwrap_or("error");
-                self.ctx.aviso(&format!("No se pudo traer «{}»: {e}", t.nombre));
+                let que = if t.conversion.is_some() { "convertir" } else { "traer" };
+                self.ctx.aviso(&format!("No se pudo {que} «{}»: {e}", t.nombre));
             }
         }
 
@@ -350,13 +461,14 @@ impl Descargas {
         self.limpiar.set_sensitive(trabajos.iter().any(Trabajo::terminado));
         self.boton.set_visible(n > 0 || self.lista_navegador.first_child().is_some());
         self.boton.set_tooltip_text(Some(&match pendientes {
-            0 => "Descargas".to_string(),
-            1 => "Descargas (1 pendiente)".to_string(),
-            p => format!("Descargas ({p} pendientes)"),
+            0 => "Descargas y conversiones".to_string(),
+            1 => "Descargas y conversiones (1 pendiente)".to_string(),
+            p => format!("Descargas y conversiones ({p} pendientes)"),
         }));
     }
 
     fn fila_nueva(self: &Rc<Self>, id: i64) -> Fila {
+        let icono = gtk::Image::new();
         let nombre = etiqueta_nombre("");
         let barra = gtk::ProgressBar::new();
         let texto = etiqueta_estado();
@@ -367,7 +479,8 @@ impl Descargas {
         let reintentar = boton("view-refresh-symbolic", "Reintentar");
         let cancelar = boton("media-playback-stop-symbolic", "Cancelar");
         let quitar = boton("window-close-symbolic", "Quitar de la lista");
-        let caja = caja_fila(&nombre, &barra, &texto, &[&subir, &bajar, &pausar, &reanudar, &reintentar, &cancelar, &quitar]);
+        let caja =
+            caja_fila(&icono, &nombre, &barra, &texto, &[&subir, &bajar, &pausar, &reanudar, &reintentar, &cancelar, &quitar]);
         let fila = gtk::ListBoxRow::builder().child(&caja).activatable(false).build();
         for (b, accion) in [
             (&subir, Accion::Subir),
@@ -385,7 +498,21 @@ impl Descargas {
                 }
             });
         }
-        Fila { fila, nombre, barra, texto, subir, bajar, pausar, reanudar, reintentar, cancelar, quitar, ultimo: RefCell::default() }
+        Fila {
+            fila,
+            icono,
+            nombre,
+            barra,
+            texto,
+            subir,
+            bajar,
+            pausar,
+            reanudar,
+            reintentar,
+            cancelar,
+            quitar,
+            ultimo: RefCell::default(),
+        }
     }
 
     fn hacer(self: &Rc<Self>, id: i64, accion: Accion) {
@@ -412,7 +539,7 @@ impl Descargas {
         texto.set_label("Empezando…");
         let cancelar = boton("media-playback-stop-symbolic", "Cancelar");
         let fila = gtk::ListBoxRow::builder()
-            .child(&caja_fila(&nombre, &barra, &texto, &[&cancelar]))
+            .child(&caja_fila(&gtk::Image::from_icon_name(ICONO_DESCARGA), &nombre, &barra, &texto, &[&cancelar]))
             .activatable(false)
             .build();
         self.lista_navegador.append(&fila);
@@ -498,7 +625,7 @@ impl Descargas {
 
 /// Pone una fila al día (solo si el trabajo ha cambiado).
 fn pintar(f: &Fila, t: &Trabajo, i: usize, n: usize) {
-    if t.estado == cola::DESCARGANDO && t.total.is_none() || t.estado == cola::IMPORTANDO {
+    if matches!(t.estado.as_str(), cola::DESCARGANDO | cola::CONVIRTIENDO) && t.total.is_none() || t.estado == cola::IMPORTANDO {
         f.barra.pulse();
     }
     if f.ultimo.borrow().as_ref() == Some(t) {
@@ -506,6 +633,9 @@ fn pintar(f: &Fila, t: &Trabajo, i: usize, n: usize) {
         f.bajar.set_sensitive(i + 1 < n);
         return;
     }
+    let (icono, que) = icono(t);
+    f.icono.set_icon_name(Some(icono));
+    f.icono.set_tooltip_text(Some(que));
     f.nombre.set_label(&t.nombre);
     f.nombre.set_tooltip_text(Some(&t.nombre));
     f.texto.set_label(&describir(t));
@@ -513,18 +643,22 @@ fn pintar(f: &Fila, t: &Trabajo, i: usize, n: usize) {
         (cola::LISTA, _) => f.barra.set_fraction(1.0),
         (_, Some(total)) if total > 0 => f.barra.set_fraction(t.hecho as f64 / total as f64),
         (cola::POR_IMPORTAR, _) => f.barra.set_fraction(1.0),
-        (cola::DESCARGANDO | cola::IMPORTANDO, _) => {}
+        (cola::DESCARGANDO | cola::IMPORTANDO | cola::CONVIRTIENDO, _) => {}
         _ => f.barra.set_fraction(0.0),
     }
     let e = t.estado.as_str();
     let descarga = t.url.is_some();
-    let en_marcha_sin_peticion = e == cola::DESCARGANDO && t.peticion.is_none();
-    let en_espera = matches!(e, cola::EN_COLA | cola::PAUSADA | cola::POR_IMPORTAR);
+    let conversion = t.conversion.is_some();
+    let en_marcha_sin_peticion = matches!(e, cola::DESCARGANDO | cola::CONVIRTIENDO) && t.peticion.is_none();
+    let en_espera = matches!(e, cola::EN_COLA | cola::PAUSADA | cola::POR_IMPORTAR | cola::POR_CONVERTIR);
     f.subir.set_visible(en_espera);
     f.bajar.set_visible(en_espera);
     f.subir.set_sensitive(i > 0);
     f.bajar.set_sensitive(i + 1 < n);
-    f.pausar.set_visible(descarga && (e == cola::EN_COLA || en_marcha_sin_peticion));
+    // Una conversión en marcha no se puede pausar: solo mientras espera.
+    f.pausar.set_visible(
+        descarga && (e == cola::EN_COLA || en_marcha_sin_peticion) || conversion && e == cola::POR_CONVERTIR,
+    );
     f.reanudar.set_visible(e == cola::PAUSADA);
     f.reintentar.set_visible(e == cola::ERROR || e == cola::CANCELADA);
     f.cancelar.set_visible(en_espera || en_marcha_sin_peticion);

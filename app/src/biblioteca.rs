@@ -96,6 +96,7 @@ struct Tarjeta {
 
 pub struct Biblioteca {
     ctx: Rc<Contexto>,
+    descargas: Rc<crate::descargas::Descargas>,
     pub raiz: gtk::Stack,
     rejilla: gtk::FlowBox,
     filtro: gtk::SearchEntry,
@@ -164,6 +165,7 @@ impl Biblioteca {
 
         let yo = Rc::new(Self {
             ctx: ctx.clone(),
+            descargas: descargas.clone(),
             raiz,
             rejilla,
             filtro,
@@ -486,7 +488,7 @@ impl Biblioteca {
         accion("crear-30", Box::new(|yo, f| yo.crear_version_30(f)));
         accion("rehacer-30", Box::new(|yo, f| yo.crear_versiones_30(f.original.iter().cloned().collect())));
         accion("borrar-30", Box::new(|yo, f| yo.borrar_version_30(f)));
-        accion("convertir", Box::new(|yo, f| convertir::abrir(yo.ctx.clone(), f.principal())));
+        accion("convertir", Box::new(|yo, f| convertir::abrir(yo.ctx.clone(), yo.descargas.clone(), f.principal())));
         accion("sin-audio", Box::new(|yo, f| yo.quitar_audio(f.rutas())));
         accion(
             "carpeta",
@@ -614,7 +616,8 @@ impl Biblioteca {
                 Some(&format!("¿Rehacer {} versión(es) de 30 fps?", originales.len())),
                 Some(&format!(
                     "Se vuelven a crear con la calidad elegida en Ajustes ({calidad}) y sustituyen a las \
-                     de ahora. Los originales no se tocan. Puede tardar bastante.\n\n{}",
+                     de ahora. Los originales no se tocan. Van a la cola de descargas y conversiones: \
+                     puede tardar bastante, pero no hace falta dejar la app abierta.\n\n{}",
                     originales.iter().map(|r| nombre(r)).collect::<Vec<_>>().join("\n")
                 )),
             );
@@ -653,8 +656,9 @@ impl Biblioteca {
                 Some(&format!("¿Crear la versión de 30 fps de {} vídeo(s)?", rapidos.len())),
                 Some(&format!(
                     "Los originales se conservan: las versiones van a la subcarpeta «{}» de la \
-                     biblioteca y ocupan más disco. Puede tardar bastante, sobre todo si la \
-                     conversión va por la CPU.\n\n{}",
+                     biblioteca y ocupan más disco. Van a la cola de descargas y conversiones: \
+                     puede tardar bastante, sobre todo si la conversión va por la CPU, pero no hace \
+                     falta dejar la app abierta.\n\n{}",
                     config::CARPETA_30,
                     rapidos
                         .iter()
@@ -672,56 +676,10 @@ impl Biblioteca {
         });
     }
 
-    /// Uno detrás de otro, con un aviso que enseña el avance y permite cancelar entre vídeo y
-    /// vídeo.
+    /// A la cola de descargas y conversiones: las hace el gestor, una detrás de otra, aunque se
+    /// cierre la app.
     fn crear_versiones_30(self: &Rc<Self>, originales: Vec<PathBuf>) {
-        let yo = self.clone();
-        glib::spawn_future_local(async move {
-            let cancelado = Rc::new(Cell::new(false));
-            let aviso = adw::Toast::builder().timeout(0).button_label("Cancelar").build();
-            {
-                let cancelado = cancelado.clone();
-                aviso.connect_button_clicked(move |a| {
-                    cancelado.set(true);
-                    a.set_title("Cancelando al acabar el vídeo actual…");
-                });
-            }
-            yo.ctx.avisos.add_toast(aviso.clone());
-            let total = originales.len();
-            let (mut hechos, mut errores) = (0, 0);
-            for (n, original) in originales.into_iter().enumerate() {
-                if cancelado.get() {
-                    break;
-                }
-                aviso.set_title(&format!("Creando la versión de 30 fps {}/{total}: {}", n + 1, nombre(&original)));
-                let o = original.clone();
-                let calidad = yo.ctx.calidad_30();
-                let r = gio::spawn_blocking(move || importar::crear_version_30(&o, calidad))
-                    .await
-                    .unwrap_or_else(|_| Err("fallo interno".into()));
-                match r {
-                    Ok(v30) => {
-                        hechos += 1;
-                        // Si es el fondo actual y se prefiere la de 30, pasar a ella ya.
-                        if yo.preferir_30() && yo.ctx.video_actual() == original {
-                            yo.ctx.usar_video(&v30);
-                        }
-                    }
-                    Err(e) => {
-                        crate::depurar!("versión de 30 fps de {}: {e}", original.display());
-                        errores += 1;
-                    }
-                }
-                yo.recargar();
-            }
-            aviso.dismiss();
-            yo.ctx.aviso(&match (hechos, errores, cancelado.get()) {
-                (1, 0, _) if total == 1 => "Versión de 30 fps creada".to_string(),
-                (h, 0, false) => format!("{h} versión(es) de 30 fps creadas"),
-                (h, 0, true) => format!("Cancelado: {h} de {total} versión(es) de 30 fps creadas"),
-                (h, e, _) => format!("{h} versión(es) de 30 fps creadas; {e} con errores"),
-            });
-        });
+        self.descargas.crear_versiones_30(originales);
     }
 }
 

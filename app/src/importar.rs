@@ -2,8 +2,9 @@
 //! Wallpaper Engine (project.json de tipo «video»). Quita el audio si toca y avisa si el códec
 //! no lo puede decodificar la GPU. Todo bloqueante: se llama desde gio::spawn_blocking.
 
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 use crate::config;
@@ -195,17 +196,86 @@ pub fn mas_de_30_fps(fps: f64) -> bool {
     fps > 30.5
 }
 
-/// Crea la versión de 30 fps de un vídeo de la biblioteca (en la subcarpeta «30 fps»), con la
-/// `calidad` dada (QP/CRF); el original no se toca.
-pub fn crear_version_30(original: &Path, calidad: i32) -> Result<PathBuf, String> {
-    let final_ = config::ruta_version_30(original);
-    if let Some(dir) = final_.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+/// Opciones de fondo-animado-convertir para la versión de 30 fps, con la `calidad` dada (QP/CRF).
+pub fn opciones_version_30(calidad: i32) -> Vec<String> {
+    vec!["-f".into(), "30".into(), "-q".into(), calidad.to_string()]
+}
+
+/// Lo que va contando fondo-animado-convertir --progreso.
+#[derive(Debug, PartialEq)]
+pub enum Avance {
+    /// Segundos que durará el resultado.
+    Duracion(f64),
+    /// El codificador de ffmpeg con el que va.
+    Codificador(String),
+    /// Ha fallado un codificador y prueba con el siguiente (vuelve a empezar).
+    Reinicio,
+    /// Segundos ya codificados.
+    Hecho(f64),
+}
+
+/// Lanza fondo-animado-convertir --progreso con `opciones` de `origen` a `destino`. Por cada
+/// avance llama a `seguir`; si devuelve false, para la conversión (SIGTERM: el script mata a
+/// ffmpeg y borra `destino`). Ok(false) si se paró así.
+pub fn convertir_con_progreso(
+    origen: &Path,
+    destino: &Path,
+    opciones: &[String],
+    seguir: &mut dyn FnMut(Avance) -> bool,
+) -> Result<bool, String> {
+    crate::depurar!("convertir {} → {} ({})", origen.display(), destino.display(), opciones.join(" "));
+    let mut hijo = Command::new(config::programa("fondo-animado-convertir"))
+        .arg("--progreso")
+        .args(opciones)
+        .arg(origen)
+        .arg(destino)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("no se pudo ejecutar fondo-animado-convertir: {e}"))?;
+    // stderr en otro hilo, para que no se llene la tubería mientras se lee stdout.
+    let mut stderr = hijo.stderr.take().expect("stderr");
+    let errores = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stderr.read_to_string(&mut s);
+        s
+    });
+    let mut parado = false;
+    for linea in BufReader::new(hijo.stdout.take().expect("stdout")).lines() {
+        let Ok(linea) = linea else { break };
+        let linea = linea.trim();
+        let avance = if let Some(d) = linea.strip_prefix("DURACION ") {
+            Avance::Duracion(d.parse().unwrap_or(0.0))
+        } else if let Some(c) = linea.strip_prefix("CODIFICADOR ") {
+            Avance::Codificador(c.to_string())
+        } else if linea == "REINICIO" {
+            Avance::Reinicio
+        } else if let Some(us) = linea.strip_prefix("out_time_us=") {
+            match us.parse::<f64>() {
+                Ok(us) if us >= 0.0 => Avance::Hecho(us / 1e6),
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        if !parado && !seguir(avance) {
+            parado = true;
+            let _ = Command::new("kill").arg("-TERM").arg(hijo.id().to_string()).status();
+        }
     }
-    let destino = final_.with_extension("convirtiendo.mp4");
-    convertir(original, &destino, None, Some(30), Some(calidad))?;
-    std::fs::rename(&destino, &final_).map_err(|e| e.to_string())?;
-    Ok(final_)
+    let estado = hijo.wait().map_err(|e| e.to_string())?;
+    let errores = errores.join().unwrap_or_default();
+    if parado {
+        let _ = std::fs::remove_file(destino);
+        return Ok(false);
+    }
+    if !estado.success() {
+        let _ = std::fs::remove_file(destino);
+        let ultima = errores.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("la conversión ha fallado");
+        return Err(ultima.trim().to_string());
+    }
+    Ok(true)
 }
 
 const ARCHIVOS: &[&str] = &["zip", "rar", "7z", "tar", "gz", "xz"];
@@ -308,8 +378,8 @@ pub struct Resultado {
 }
 
 /// Importa `origen` (vídeo, archivo comprimido o carpeta) a la biblioteca. `mover`: el origen
-/// es temporal (descarga) y se puede mover en vez de copiar. `version_30`: si el vídeo va a más
-/// de 30 fps, crear también su versión de 30, con esa calidad.
+/// es temporal (descarga) y se puede mover en vez de copiar. La versión de 30 fps, si toca, la
+/// encola luego el gestor (es una conversión más).
 pub fn importar(
     origen: &Path,
     biblioteca: &Path,
@@ -317,12 +387,8 @@ pub fn importar(
     sin_audio: bool,
     mover: bool,
     optimizar_a: Option<(i32, i32)>,
-    version_30: Option<i32>,
 ) -> Result<Resultado, String> {
-    crate::depurar!(
-        "importar {} (sin audio: {sin_audio}, optimizar: {optimizar_a:?}, versión de 30 fps: {version_30:?})",
-        origen.display()
-    );
+    crate::depurar!("importar {} (sin audio: {sin_audio}, optimizar: {optimizar_a:?})", origen.display());
     std::fs::create_dir_all(biblioteca).map_err(|e| e.to_string())?;
     let mut temporal = None;
     let (video, titulo_paquete, mut mover) = if origen.is_dir() {
@@ -405,12 +471,6 @@ pub fn importar(
             Err(e) => avisos.push(format!("no se pudo convertir: {e}")),
         }
     }
-    if let Some(calidad) = version_30.filter(|_| mas_de_30_fps(info.fps)) {
-        match crear_version_30(&ruta, calidad) {
-            Ok(_) => avisos.push(format!("creada también la versión de 30 fps (el original va a {:.0})", info.fps)),
-            Err(e) => avisos.push(format!("no se pudo crear la versión de 30 fps: {e}")),
-        }
-    }
     Ok(Resultado { ruta, info, avisos })
 }
 
@@ -453,33 +513,54 @@ mod pruebas {
         assert!(info(&con_audio).unwrap().audio);
 
         let biblioteca = dir.join("biblioteca");
-        let res = importar(&con_audio, &biblioteca, Some(&primero.titulo), true, true, None, None).unwrap();
+        let res = importar(&con_audio, &biblioteca, Some(&primero.titulo), true, true, None).unwrap();
         println!("importado {} · {} · avisos {:?}", res.ruta.display(), res.info.resumen(), res.avisos);
         assert!(!res.info.audio);
         assert!(res.ruta.starts_with(&biblioteca));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Importar un vídeo de 60 fps pidiendo la versión de 30: el original se queda y la versión
-    /// va a la subcarpeta «30 fps» con el mismo nombre.
-    #[test]
-    fn version_de_30_fps_al_importar() {
-        let dir = dir_prueba("v30");
+    fn video_60_fps(dir: &Path, segundos: u32) -> PathBuf {
         let video = dir.join("Rápido.mp4");
         let ok = Command::new("ffmpeg")
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:r=60:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", &format!("testsrc=s=320x180:r=60:d={segundos}")])
+            .args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
             .arg(&video)
             .status()
             .unwrap();
         assert!(ok.success());
-        let biblioteca = dir.join("biblioteca");
-        let r = importar(&video, &biblioteca, None, true, false, None, Some(28)).unwrap();
-        println!("avisos {:?}", r.avisos);
-        assert_eq!(r.info.fps.round(), 60.0);
-        let v30 = config::ruta_version_30(&r.ruta);
-        assert_eq!(v30, biblioteca.join("30 fps").join("rápido.mp4"));
-        assert_eq!(info(&v30).unwrap().fps.round(), 30.0);
-        assert!(!v30.with_extension("convirtiendo.mp4").exists());
+        video
+    }
+
+    /// La versión de 30 fps con progreso: cuenta la duración, el codificador y el avance.
+    #[test]
+    fn version_de_30_fps_con_progreso() {
+        let dir = dir_prueba("v30");
+        let video = video_60_fps(&dir, 1);
+        let destino = dir.join("30.mp4");
+        let mut avances = vec![];
+        let r = convertir_con_progreso(&video, &destino, &opciones_version_30(28), &mut |a| {
+            avances.push(a);
+            true
+        });
+        assert_eq!(r, Ok(true));
+        assert_eq!(info(&destino).unwrap().fps.round(), 30.0);
+        assert!(avances.contains(&Avance::Duracion(1.0)), "{avances:?}");
+        assert!(avances.iter().any(|a| matches!(a, Avance::Codificador(_))));
+        assert!(avances.iter().any(|a| matches!(a, Avance::Hecho(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Parar a mitad: el script mata a ffmpeg y no queda el fichero a medias.
+    #[test]
+    fn conversion_cancelada() {
+        let dir = dir_prueba("cancelar");
+        let video = video_60_fps(&dir, 20);
+        let destino = dir.join("30.mp4");
+        let opciones = ["-f", "30", "-c", "hevc", "--cpu"].map(String::from);
+        let r = convertir_con_progreso(&video, &destino, &opciones, &mut |a| !matches!(a, Avance::Hecho(_)));
+        assert_eq!(r, Ok(false));
+        assert!(!destino.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -504,12 +585,12 @@ mod pruebas {
         assert!(Command::new("7z").arg("a").arg(&zip).arg(&paquete).output().unwrap().status.success());
 
         let biblioteca = dir.join("biblioteca");
-        let r = importar(&zip, &biblioteca, None, true, false, None, None).unwrap();
+        let r = importar(&zip, &biblioteca, None, true, false, None).unwrap();
         assert_eq!(r.ruta.file_name().unwrap(), "mi-fondo-we.mp4");
 
         std::fs::write(paquete.join("project.json"), r#"{"title":"Escena","type":"scene","file":"scene.json"}"#).unwrap();
         std::fs::remove_file(paquete.join("fondo.mp4")).unwrap();
-        let e = importar(&paquete, &biblioteca, None, true, false, None, None).unwrap_err();
+        let e = importar(&paquete, &biblioteca, None, true, false, None).unwrap_err();
         assert!(e.contains("scene"), "{e}");
         let _ = std::fs::remove_dir_all(&dir);
     }

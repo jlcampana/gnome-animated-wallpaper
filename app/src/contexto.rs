@@ -82,7 +82,8 @@ impl Contexto {
     }
 
     pub fn aviso(&self, texto: &str) {
-        self.avisos.add_toast(adw::Toast::new(texto));
+        // Sin markup: los títulos de los vídeos pueden llevar «&» y similares.
+        self.avisos.add_toast(adw::Toast::builder().title(texto).use_markup(false).build());
     }
 
     pub fn biblioteca(&self) -> PathBuf {
@@ -121,7 +122,7 @@ impl Contexto {
         if !avisos.is_empty() {
             texto.push_str(&format!(" ({})", avisos.join("; ")));
         }
-        let toast = adw::Toast::builder().title(texto).button_label("Usar de fondo").timeout(8).build();
+        let toast = adw::Toast::builder().title(texto).use_markup(false).button_label("Usar de fondo").timeout(8).build();
         let ctx = self.clone();
         let ruta = ruta.to_path_buf();
         toast.connect_button_clicked(move |_| ctx.usar_video(&ruta));

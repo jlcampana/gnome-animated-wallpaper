@@ -14,6 +14,7 @@ mod gestor;
 mod importar;
 mod navegador;
 mod pagina_ajustes;
+mod previa;
 mod red;
 
 use std::path::PathBuf;

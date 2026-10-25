@@ -1,14 +1,16 @@
 //! Diálogo «Convertir»: resolución, ajuste, fps, tramo, fundido del bucle, códec y calidad.
-//! Lanza fondo-animado-convertir --progreso y enseña el avance.
+//! La conversión va a la cola de descargas y conversiones (la hace el gestor, con
+//! fondo-animado-convertir).
 
-use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
 
+use crate::cola::{Conversion, TipoConversion};
 use crate::contexto::Contexto;
+use crate::descargas::Descargas;
 use crate::{config, importar};
 
 const AJUSTES: &[(&str, &str)] = &[
@@ -25,7 +27,7 @@ const CODECS: &[(&str, &str)] = &[
     ("av1", "AV1"),
 ];
 
-pub fn abrir(ctx: Rc<Contexto>, origen: &Path) {
+pub fn abrir(ctx: Rc<Contexto>, descargas: Rc<Descargas>, origen: &Path) {
     let (ancho, alto) = config::resolucion_pantalla();
     let resoluciones: Vec<String> = std::iter::once(format!("{ancho}x{alto}"))
         .chain(["1920x1080", "2560x1080", "2560x1440", "3440x1440", "3840x2160"].iter().map(|s| s.to_string()))
@@ -123,18 +125,6 @@ pub fn abrir(ctx: Rc<Contexto>, origen: &Path) {
         pagina.add(g);
     }
 
-    let barra = gtk::ProgressBar::builder().show_text(true).visible(false).build();
-    let estado = gtk::Label::builder().css_classes(["dim-label", "caption"]).visible(false).wrap(true).build();
-    let progreso = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .margin_start(12)
-        .margin_end(12)
-        .margin_bottom(12)
-        .build();
-    progreso.append(&barra);
-    progreso.append(&estado);
-
     let boton = gtk::Button::builder().label("Convertir").css_classes(["suggested-action"]).build();
     let cabecera = adw::HeaderBar::new();
     cabecera.pack_end(&boton);
@@ -142,7 +132,6 @@ pub fn abrir(ctx: Rc<Contexto>, origen: &Path) {
     let vista = adw::ToolbarView::new();
     vista.add_top_bar(&cabecera);
     vista.set_content(Some(&pagina));
-    vista.add_bottom_bar(&progreso);
 
     let dialogo = adw::Dialog::builder()
         .title(format!("Convertir «{base}»"))
@@ -151,40 +140,24 @@ pub fn abrir(ctx: Rc<Contexto>, origen: &Path) {
         .child(&vista)
         .build();
 
-    let proceso: Rc<RefCell<Option<gio::Subprocess>>> = Rc::default();
-    {
-        let proceso = proceso.clone();
-        dialogo.connect_closed(move |_| {
-            if let Some(p) = proceso.take() {
-                p.send_signal(15);
-            }
-        });
-    }
-
     let ventana = ctx.ventana.clone();
     let origen = origen.to_path_buf();
     let d = dialogo.downgrade();
-    boton.connect_clicked(move |boton| {
-        if let Some(p) = proceso.take() {
-            p.send_signal(15);
-            return;
-        }
+    boton.connect_clicked(move |_| {
         let res = match resolucion.selected() as usize {
             0 => format!("{ancho}x{alto}"),
             i if i <= resoluciones.len() => resoluciones[i - 1].clone(),
             _ => "original".into(),
         };
-        let biblioteca = ctx.biblioteca();
-        let _ = std::fs::create_dir_all(&biblioteca);
-        let limpio = config::nombre_limpio(&nombre.text());
-        let destino = if reemplazar.is_active() {
-            origen.with_extension("convirtiendo.mp4")
+        let reemplazar = reemplazar.is_active();
+        let destino = if reemplazar {
+            origen.with_extension("mp4")
         } else {
-            config::ruta_libre(&biblioteca, &limpio, "mp4")
+            let biblioteca = ctx.biblioteca();
+            let _ = std::fs::create_dir_all(&biblioteca);
+            config::ruta_libre(&biblioteca, &config::nombre_limpio(&nombre.text()), "mp4")
         };
-        let mut args: Vec<String> = vec![
-            config::programa("fondo-animado-convertir").to_string_lossy().into_owned(),
-            "--progreso".into(),
+        let mut opciones: Vec<String> = vec![
             "-r".into(),
             res,
             "-a".into(),
@@ -203,107 +176,13 @@ pub fn abrir(ctx: Rc<Contexto>, origen: &Path) {
             (calidad.value() as i32).to_string(),
         ];
         if cpu.is_active() {
-            args.push("--cpu".into());
+            opciones.push("--cpu".into());
         }
-        args.push(origen.to_string_lossy().into_owned());
-        args.push(destino.to_string_lossy().into_owned());
-
-        crate::depurar!("convertir: {}", args.join(" "));
-        let argv: Vec<&std::ffi::OsStr> = args.iter().map(|a| std::ffi::OsStr::new(a.as_str())).collect();
-        let sp = match gio::Subprocess::newv(&argv, gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_PIPE) {
-            Ok(sp) => sp,
-            Err(e) => {
-                ctx.aviso(&format!("No se pudo lanzar la conversión: {e}"));
-                return;
-            }
-        };
-        proceso.replace(Some(sp.clone()));
-        pagina.set_sensitive(false);
-        boton.set_label("Cancelar");
-        boton.remove_css_class("suggested-action");
-        boton.add_css_class("destructive-action");
-        barra.set_visible(true);
-        barra.set_fraction(0.0);
-        barra.set_text(Some("Empezando…"));
-        estado.set_visible(true);
-        estado.set_label("");
-
-        let ctx = ctx.clone();
-        let barra = barra.clone();
-        let estado = estado.clone();
-        let boton = boton.clone();
-        let pagina = pagina.clone();
-        let proceso = proceso.clone();
-        let origen = origen.clone();
-        let reemplazar = reemplazar.is_active();
-        let usar = usar.is_active();
-        let d = d.clone();
-        glib::spawn_future_local(async move {
-            let lector = gio::DataInputStream::new(&sp.stdout_pipe().expect("stdout"));
-            let mut duracion = 0.0f64;
-            while let Ok(Some(linea)) = lector.read_line_utf8_future(glib::Priority::DEFAULT).await {
-                let linea = linea.trim();
-                if let Some(d) = linea.strip_prefix("DURACION ") {
-                    duracion = d.parse().unwrap_or(0.0);
-                } else if let Some(c) = linea.strip_prefix("CODIFICADOR ") {
-                    let donde = if c.starts_with("lib") { "CPU" } else { "GPU" };
-                    estado.set_label(&format!("Codificando con {c} ({donde})"));
-                } else if linea == "REINICIO" {
-                    estado.set_label("El codificador ha fallado; pruebo otro…");
-                } else if let Some(us) = linea.strip_prefix("out_time_us=") {
-                    if let (Ok(us), true) = (us.parse::<f64>(), duracion > 0.0) {
-                        let f = (us / 1e6 / duracion).clamp(0.0, 1.0);
-                        barra.set_fraction(f);
-                        barra.set_text(Some(&format!("{:.0} %", f * 100.0)));
-                    }
-                } else if let Some(v) = linea.strip_prefix("speed=") {
-                    barra.set_tooltip_text(Some(&format!("Velocidad: {v}")));
-                }
-            }
-            let ok = sp.wait_check_future().await.is_ok();
-            let cancelado = proceso.take().is_none();
-            pagina.set_sensitive(true);
-            boton.set_label("Convertir");
-            boton.remove_css_class("destructive-action");
-            boton.add_css_class("suggested-action");
-            if cancelado {
-                barra.set_visible(false);
-                estado.set_label("Cancelada");
-                let _ = std::fs::remove_file(&destino);
-                return;
-            }
-            if !ok {
-                let mut error = String::new();
-                if let Some(e) = sp.stderr_pipe() {
-                    let lector = gio::DataInputStream::new(&e);
-                    while let Ok(Some(l)) = lector.read_line_utf8_future(glib::Priority::DEFAULT).await {
-                        error = l.to_string();
-                    }
-                }
-                estado.set_label(&format!("Error: {error}"));
-                barra.set_visible(false);
-                return;
-            }
-            let final_ = if reemplazar {
-                let f = origen.with_extension("mp4");
-                let _ = std::fs::remove_file(&origen);
-                let _ = std::fs::rename(&destino, &f);
-                f
-            } else {
-                destino
-            };
-            ctx.biblioteca_cambiada();
-            if usar {
-                ctx.usar_video(&final_);
-            }
-            ctx.aviso(&format!(
-                "Conversión terminada: {}",
-                final_.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-            ));
-            if let Some(d) = d.upgrade() {
-                d.close();
-            }
-        });
+        let conversion = Conversion { tipo: TipoConversion::Personalizada, opciones, reemplazar };
+        descargas.convertir(&origen, &destino, conversion, usar.is_active());
+        if let Some(d) = d.upgrade() {
+            d.close();
+        }
     });
 
     dialogo.present(Some(&ventana));
