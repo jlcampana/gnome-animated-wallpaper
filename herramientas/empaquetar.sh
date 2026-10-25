@@ -38,10 +38,9 @@ paquete() {  # $1 = etiqueta (fedora44…), $2 = carpeta con los binarios compil
     echo "dist/$nombre.tar.gz ($(du -h "dist/$nombre.tar.gz" | cut -f1))"
 }
 
-# Local (Fedora).
-. /etc/os-release
+# Local (Fedora). os-release en una subshell: define VERSION y la pisaría.
 cargo build --release --locked
-paquete "${ID}${VERSION_ID}" target/release
+paquete "$(. /etc/os-release && echo "$ID$VERSION_ID")" target/release
 
 ((SOLO_LOCAL)) && exit 0
 
@@ -49,6 +48,7 @@ paquete "${ID}${VERSION_ID}" target/release
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/fondos-animados-build/ubuntu$UBUNTU"
 mkdir -p "$CACHE/src" "$CACHE/target" "$CACHE/cargo"
 rsync -a --delete --exclude target --exclude dist --exclude .git "$RAIZ/" "$CACHE/src/"
+# Reutiliza lo ya compilado en el contenedor si no ha cambiado el código.
 podman run --rm \
     -v "$CACHE/src:/src:Z" -v "$CACHE/target:/target:Z" -v "$CACHE/cargo:/cargo:Z" \
     "docker.io/library/ubuntu:$UBUNTU" bash -c '

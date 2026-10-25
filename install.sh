@@ -287,7 +287,9 @@ instalar_ficheros() {
     info "Lanzador «Fondos animados» en el menú de aplicaciones"
 
     local videos
-    videos=$(xdg-user-dir VIDEOS 2>/dev/null || echo "$HOME/Videos")
+    videos=$(xdg-user-dir VIDEOS 2>/dev/null || true)
+    # Sin carpeta de vídeos configurada, xdg-user-dir devuelve la home.
+    [[ -z $videos || $videos == "$HOME" ]] && videos="$HOME/Videos"
     mkdir -p "$videos/Fondos animados"
     info "Biblioteca de vídeos: $videos/Fondos animados"
 
