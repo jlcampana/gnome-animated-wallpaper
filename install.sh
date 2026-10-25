@@ -288,14 +288,21 @@ instalar_ficheros() {
     glib-compile-schemas "$EXT_DIR/schemas"
     info "Extensión → $EXT_DIR"
 
-    rm -rf "$EXT_MEDIA_DIR"
-    cp -r "$ORIGEN/extension/$UUID_MEDIA" "$EXT_MEDIA_DIR"
-    glib-compile-schemas "$EXT_MEDIA_DIR/schemas"
-    info "Media Controller (fork de Advanced Media Controller) → $EXT_MEDIA_DIR"
-
     mkdir -p "$DATOS/glib-2.0/schemas"
-    cp "$EXT_DIR/schemas/$ESQUEMA.gschema.xml" "$EXT_MEDIA_DIR/schemas/$ESQUEMA_MEDIA.gschema.xml" \
-        "$DATOS/glib-2.0/schemas/"
+    cp "$EXT_DIR/schemas/$ESQUEMA.gschema.xml" "$DATOS/glib-2.0/schemas/"
+
+    # Las releases anteriores a la 0.3.1 no traen el fork: este install.sh (el de main) puede
+    # ir con un paquete más viejo.
+    if [[ -d $ORIGEN/extension/$UUID_MEDIA ]]; then
+        rm -rf "$EXT_MEDIA_DIR"
+        cp -r "$ORIGEN/extension/$UUID_MEDIA" "$EXT_MEDIA_DIR"
+        glib-compile-schemas "$EXT_MEDIA_DIR/schemas"
+        cp "$EXT_MEDIA_DIR/schemas/$ESQUEMA_MEDIA.gschema.xml" "$DATOS/glib-2.0/schemas/"
+        info "Media Controller (fork de Advanced Media Controller) → $EXT_MEDIA_DIR"
+    else
+        aviso "este paquete no trae Media Controller: no se instala"
+    fi
+
     glib-compile-schemas "$DATOS/glib-2.0/schemas"
 
     mkdir -p "$DATOS/applications" "$DATOS/icons/hicolor/scalable/apps"
@@ -334,13 +341,13 @@ instalar_servicio() {
 activar_extensiones() {
     titulo "Extensiones de GNOME Shell"
     # Las dos a la vez pondrían dos controles multimedia en la barra.
-    if gnome-extensions list --enabled 2>/dev/null | grep -qx "$UUID_MEDIA_ORIGINAL"; then
+    if [[ -d $EXT_MEDIA_DIR ]] && gnome-extensions list --enabled 2>/dev/null | grep -qx "$UUID_MEDIA_ORIGINAL"; then
         gnome-extensions disable "$UUID_MEDIA_ORIGINAL" 2>/dev/null || true
         info "Desactivada Advanced Media Controller (la sustituye el fork Media Controller)"
     fi
     local pendiente=0
     activar_extension "$UUID" || pendiente=1
-    activar_extension "$UUID_MEDIA" || pendiente=1
+    [[ -d $EXT_MEDIA_DIR ]] && { activar_extension "$UUID_MEDIA" || pendiente=1; }
     ((pendiente)) && aviso "Cierra sesión y vuelve a entrar para que GNOME Shell cargue las extensiones."
     return 0
 }
