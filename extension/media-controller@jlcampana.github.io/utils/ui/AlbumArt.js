@@ -478,10 +478,8 @@ export const AlbumArt = GObject.registerClass(
           width: ${sz}px;
           height: ${sz}px;
           border-radius: ${br}px;
-          box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-          background: linear-gradient(135deg,
-            rgba(255,255,255,0.05) 0%,
-            rgba(255,255,255,0.02) 100%);
+          box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+          background-color: rgba(127,127,127,0.12);
           padding: 0;
           border: none;
         `,
@@ -612,9 +610,8 @@ export const AlbumArt = GObject.registerClass(
 
       this._normalButton.style = `
         width: ${sz}px; height: ${sz}px; border-radius: ${br}px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-        background: linear-gradient(135deg,
-          rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
+        box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+        background-color: rgba(127,127,127,0.12);
         padding: 0; border: none;
       `;
       this._normalCoverImage.set_width(sz);

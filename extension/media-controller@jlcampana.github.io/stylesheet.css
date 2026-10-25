@@ -104,74 +104,75 @@
     height: 340px;
 }
 
-/* Text labels */
-.media-title-label {
-    font-weight: 700;
-    font-size: 16px;
+/* Popup — macOS / Gapless look */
+.media-controller-menu .popup-menu-content {
+    border-radius: 22px;
+    padding: 16px;
 }
 
-.media-artist-label {
-    font-size: 13px;
-    font-weight: 500;
-    opacity: 0.7;
+.media-controller-item,
+.media-controller-item:hover,
+.media-controller-item:focus {
+    padding: 0;
+    background-color: transparent;
+}
+
+.media-controls-modern {
+    font-family: "Inter", "Adwaita Sans", sans-serif;
+}
+
+/* Time labels under the progress bar */
+.media-time-box {
+    margin: 0 10px;
 }
 
 .media-time-label {
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(127, 127, 127, 1);
 }
 
-.media-time-label-end {
-    font-size: 12px;
-    font-weight: 600;
-    opacity: 0.7;
-}
-
-/* Control buttons */
+/* Secondary buttons: flat glyphs, soft circle on hover */
 .media-button-modern {
-    padding: 12px;
-    border-radius: 12px;
-    background-color: rgba(0, 0, 0, 0.08);
-    transition-property: background-color, transform;
-    transition-duration: 200ms;
+    background-color: transparent;
+    border: none;
+    transition-duration: 150ms;
+}
+
+/* Shuffle / repeat are dimmed until they are switched on */
+.media-button-modern.toggle StIcon {
+    color: rgba(127, 127, 127, 1);
 }
 
 .media-button-modern:hover {
-    background-color: rgba(0, 0, 0, 0.12);
+    background-color: rgba(127, 127, 127, 0.16);
 }
 
 .media-button-modern:active {
-    background-color: rgba(0, 0, 0, 0.15);
+    background-color: rgba(127, 127, 127, 0.26);
 }
 
-/* Active shuffle / repeat  Spotify green accent */
-.media-button-modern.shuffle-active,
-.media-button-modern.repeat-active {
-    background-color: rgba(29, 185, 84, 0.2);
+.media-button-modern.active StIcon {
+    color: -st-accent-color;
 }
 
-.media-button-modern.shuffle-active StIcon,
-.media-button-modern.repeat-active StIcon {
-    color: #1db954;
-}
-
-/* Play button */
+/* Play / pause: filled accent circle */
 .media-play-button-modern {
-    padding: 16px;
-    border-radius: 50%;
-    background-color: rgba(0, 0, 0, 0.12);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-    transition-property: background-color, transform, box-shadow;
-    transition-duration: 200ms;
+    background-color: -st-accent-color;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.30);
+    transition-duration: 150ms;
 }
 
 .media-play-button-modern:hover {
-    background-color: rgba(0, 0, 0, 0.18);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.40);
 }
 
 .media-play-button-modern:active {
-    background-color: rgba(0, 0, 0, 0.22);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30);
+}
+
+.media-play-icon {
+    color: -st-accent-fg-color;
 }
 
 /* Panel media buttons */

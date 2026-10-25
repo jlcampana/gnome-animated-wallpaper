@@ -23,6 +23,10 @@ const RESUME_DELAY_MS = 200;
 const MIN_GIF_DELAY_MS = 20;
 const DEFAULT_GIF_DELAY_MS = 80;
 
+// Thin Apple-style bar with a small knob
+const SLIM_BAR_STYLE =
+  "-barlevel-height: 4px; -barlevel-border-width: 0; -slider-handle-radius: 6px; -slider-handle-border-width: 0;";
+
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 
 export const ProgressSlider = GObject.registerClass(
@@ -201,18 +205,16 @@ export const ProgressSlider = GObject.registerClass(
       });
       this.add_child(this._sliderWrapper);
 
-      const timeBox = new St.BoxLayout({ style: "margin: 0 8px;" });
+      const timeBox = new St.BoxLayout({ style_class: "media-time-box" });
       this._currentTimeLabel = new St.Label({
         text: "0:00",
         y_align: Clutter.ActorAlign.CENTER,
-        style:
-          "font-size: 12px; font-weight: 600; color: color-mix(in srgb, currentColor 70%, transparent);",
+        style_class: "media-time-label",
       });
       this._totalTimeLabel = new St.Label({
         text: "0:00",
         y_align: Clutter.ActorAlign.CENTER,
-        style:
-          "font-size: 12px; font-weight: 600; color: color-mix(in srgb, currentColor 50%, transparent);",
+        style_class: "media-time-label",
       });
       this._timeCenter = new St.Bin({
         x_expand: true,
@@ -263,10 +265,10 @@ export const ProgressSlider = GObject.registerClass(
       } else if (this._usesCanvas) {
         this._positionSlider.style = "-slider-handle-radius: 0px; opacity: 0;";
       } else if (this._useSystemColor || !this._trackColor?.trim()) {
-        this._positionSlider.style = null;
+        this._positionSlider.style = SLIM_BAR_STYLE;
       } else {
         const color = this._trackColor.trim();
-        this._positionSlider.style = `-barlevel-active-background-color: ${color}; -barlevel-active-border-color: ${color};`;
+        this._positionSlider.style = `${SLIM_BAR_STYLE} -barlevel-active-background-color: ${color}; -barlevel-active-border-color: ${color};`;
       }
     }
 

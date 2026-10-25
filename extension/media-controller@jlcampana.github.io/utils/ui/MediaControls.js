@@ -38,6 +38,9 @@ const APPEARANCE_KEYS = [
   "popup-artist-font-color",
 ];
 
+// St ignores CSS opacity, so the secondary text is dimmed on the actor
+const ARTIST_OPACITY = 160;
+
 const popupWidth = (s) => Math.max(MIN_POPUP_WIDTH, s.get_int("popup-width"));
 const titleWidth = (s) => Math.round(popupWidth(s) * 0.88);
 const artistWidth = (s) => Math.round(popupWidth(s) * 0.82);
@@ -56,16 +59,16 @@ function textStyle(s, kind, defaults) {
   const family = s.get_string(`popup-${kind}-font-family`).trim();
   const color = s.get_string(`popup-${kind}-font-color`).trim();
 
-  let style = `font-size: ${size}px; font-weight: ${bold ? "700" : defaults.weight};`;
+  let style = `font-size: ${size}px; font-weight: ${bold ? "600" : defaults.weight};`;
   if (family) style += ` font-family: ${family};`;
   if (color) style += ` color: ${color};`;
   return style;
 }
 
 const popupTitleStyle = (s) =>
-  textStyle(s, "title", { size: 16, weight: "normal" });
+  textStyle(s, "title", { size: 16, weight: "500" });
 const popupArtistStyle = (s) =>
-  textStyle(s, "artist", { size: 13, weight: "500" });
+  textStyle(s, "artist", { size: 13, weight: "normal" });
 
 export const MediaControls = GObject.registerClass(
   {
@@ -478,7 +481,7 @@ export const MediaControls = GObject.registerClass(
       this.add_child(this._content);
 
       this._header = new St.BoxLayout({
-        style: "margin-bottom: 20px; spacing: 8px;",
+        style: "margin-bottom: 14px; spacing: 8px;",
         x_align: Clutter.ActorAlign.CENTER,
         x_expand: true,
       });
@@ -527,7 +530,7 @@ export const MediaControls = GObject.registerClass(
 
       this._infoBox = new St.BoxLayout({
         orientation: Clutter.Orientation.VERTICAL,
-        style: "spacing: 4px; margin-top: 16px; margin-bottom: 16px;",
+        style: "spacing: 2px; margin-top: 4px; margin-bottom: 10px;",
         x_align: align,
         x_expand: true,
       });
@@ -543,6 +546,7 @@ export const MediaControls = GObject.registerClass(
         y_align: Clutter.ActorAlign.CENTER,
         x_expand: true,
         style: `min-height: 22px; max-width: ${artistWidth(settings)}px;`,
+        opacity: ARTIST_OPACITY,
       });
       this._infoBox.add_child(this._titleSlot);
       this._infoBox.add_child(this._artistSlot);

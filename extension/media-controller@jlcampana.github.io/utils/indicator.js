@@ -33,8 +33,10 @@ export const MediaIndicator = GObject.registerClass(
         reactive: false,
         can_focus: false,
       });
+      item.add_style_class_name("media-controller-item");
       item.add_child(this._controls);
       this.menu.addMenuItem(item);
+      this.menu.actor.add_style_class_name("media-controller-menu");
 
       this._eventHandlers.connectControlSignals();
 

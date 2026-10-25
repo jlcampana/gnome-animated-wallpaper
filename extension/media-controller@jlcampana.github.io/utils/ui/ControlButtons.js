@@ -120,6 +120,7 @@ export const ControlButtons = GObject.registerClass(
         m.iconSm,
         m,
       );
+      this._shuffleBtn.add_style_class_name("toggle");
       this._shuffleBtn.connect("clicked", () => this.emit("shuffle"));
 
       this._prevBtn = this._makeSecondaryBtn(
@@ -148,6 +149,7 @@ export const ControlButtons = GObject.registerClass(
         m.iconSm,
         m,
       );
+      this._repeatBtn.add_style_class_name("toggle");
       this._repeatBtn.connect("clicked", () => this.emit("repeat"));
 
       this._addChildrenInOrder();
@@ -233,13 +235,6 @@ export const ControlButtons = GObject.registerClass(
         track_hover: true,
       });
 
-      btn.connect("enter-event", () => {
-        btn.style = _secondaryHoverStyle(m);
-      });
-      btn.connect("leave-event", () => {
-        btn.style = _secondaryStyle(m);
-      });
-
       return btn;
     }
 
@@ -253,17 +248,10 @@ export const ControlButtons = GObject.registerClass(
         child: new St.Icon({
           icon_name: iconName,
           icon_size: iconSize,
-          style: "color: #ffffff;",
+          style_class: "media-play-icon",
         }),
         can_focus: true,
         track_hover: true,
-      });
-
-      btn.connect("enter-event", () => {
-        btn.style = _playHoverStyle(m);
-      });
-      btn.connect("leave-event", () => {
-        btn.style = _playStyle(m);
       });
 
       return btn;
@@ -277,36 +265,19 @@ export const ControlButtons = GObject.registerClass(
           : "media-playback-start-symbolic";
 
       // Shuffle
-      const m = _metrics(this._settings);
-
-      if (info.shuffle) {
-        this._shuffleBtn.add_style_class_name("active");
-        this._shuffleBtn.style = _activeStyle(m);
-        this._shuffleBtn.child.style = "color: #1db954;";
-      } else {
-        this._shuffleBtn.remove_style_class_name("active");
-        this._shuffleBtn.style = _secondaryStyle(m);
-        this._shuffleBtn.child.style_class = "media-icon";
-        this._shuffleBtn.child.style = "";
-      }
+      if (info.shuffle) this._shuffleBtn.add_style_class_name("active");
+      else this._shuffleBtn.remove_style_class_name("active");
 
       //  Repeat
       if (info.loopStatus === "Track") {
         this._repeatBtn.child.icon_name = "media-playlist-repeat-song-symbolic";
         this._repeatBtn.add_style_class_name("active");
-        this._repeatBtn.style = _activeStyle(m);
-        this._repeatBtn.child.style = "color: #1db954;";
       } else if (info.loopStatus === "Playlist") {
         this._repeatBtn.child.icon_name = "media-playlist-repeat-symbolic";
         this._repeatBtn.add_style_class_name("active");
-        this._repeatBtn.style = _activeStyle(m);
-        this._repeatBtn.child.style = "color: #1db954;";
       } else {
         this._repeatBtn.child.icon_name = "media-playlist-repeat-symbolic";
         this._repeatBtn.remove_style_class_name("active");
-        this._repeatBtn.style = _secondaryStyle(m);
-        this._repeatBtn.child.style_class = "media-icon";
-        this._repeatBtn.child.style = "";
       }
     }
 
@@ -329,32 +300,7 @@ function _secondaryStyle(m) {
     width: ${m.btnW}px;
     height: ${m.btnH}px;
     padding: ${m.padV}px ${m.padH}px;
-    border-radius: ${m.radius}px;
-    background-color: rgba(127,127,127,0.15);
-    border: 1px solid rgba(127,127,127,0.10);
-  `;
-}
-
-function _secondaryHoverStyle(m) {
-  return `
-    width: ${m.btnW}px;
-    height: ${m.btnH}px;
-    padding: ${m.padV}px ${m.padH}px;
-    border-radius: ${m.radius}px;
-    background-color: rgba(127,127,127,0.25);
-    border: 1px solid rgba(127,127,127,0.20);
-    transform: scale(1.05);
-  `;
-}
-
-function _activeStyle(m) {
-  return `
-    width: ${m.btnW}px;
-    height: ${m.btnH}px;
-    padding: ${m.padV}px ${m.padH}px;
-    border-radius: ${m.radius}px;
-    background-color: rgba(29,185,84,0.20);
-    border: 1px solid rgba(29,185,84,0.30);
+    border-radius: ${Math.round(m.btnH / 2)}px;
   `;
 }
 
@@ -363,20 +309,6 @@ function _playStyle(m) {
     width: ${m.playW}px;
     height: ${m.playH}px;
     padding: ${m.playPad}px;
-    border-radius: 50%;
-    background: linear-gradient(135deg,rgba(255,255,255,0.20) 0%,rgba(255,255,255,0.10) 100%);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.30);
-  `;
-}
-
-function _playHoverStyle(m) {
-  return `
-    width: ${m.playW}px;
-    height: ${m.playH}px;
-    padding: ${m.playPad}px;
-    border-radius: 50%;
-    background: linear-gradient(135deg,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0.15) 100%);
-    box-shadow: 0 6px 20px rgba(0,0,0,0.40);
-    transform: scale(1.08);
+    border-radius: ${Math.round(m.playW / 2)}px;
   `;
 }
