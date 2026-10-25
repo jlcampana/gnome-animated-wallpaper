@@ -1,6 +1,6 @@
 //! Página «Explorar»: fuente (web), búsqueda, categoría y resolución; resultados por páginas
-//! (botones anterior/siguiente: cada página sustituye a la anterior, así solo hay en memoria
-//! las miniaturas de una). Clic en un resultado: detalle con vista previa y descarga.
+//! (botones anterior/siguiente o el número de la página a la que saltar: cada página sustituye a
+//! la anterior, así solo hay en memoria las miniaturas de una). Clic en un resultado: detalle con vista previa y descarga.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -24,10 +24,11 @@ pub struct Explorar {
     rejilla: gtk::FlowBox,
     desplazable: gtk::ScrolledWindow,
     estado: gtk::Stack,
+    pagina_vacia: adw::StatusPage,
     pagina_error: adw::StatusPage,
     anterior: gtk::Button,
     siguiente: gtk::Button,
-    etiqueta_pagina: gtk::Label,
+    numero_pagina: gtk::SpinButton,
     pagina: Cell<u32>,
     peticion: Cell<u64>,
     resultados: RefCell<Vec<Resultado>>,
@@ -93,7 +94,7 @@ impl Explorar {
             .build();
         cargando.append(&adw::Spinner::builder().width_request(48).height_request(48).build());
         cargando.append(&gtk::Label::builder().label("Buscando…").css_classes(["dim-label"]).build());
-        let vacio = adw::StatusPage::builder()
+        let pagina_vacia = adw::StatusPage::builder()
             .icon_name("edit-find-symbolic")
             .title("Sin resultados")
             .description("Prueba con otra búsqueda, categoría o resolución.")
@@ -111,12 +112,17 @@ impl Explorar {
         let estado = gtk::Stack::builder().vexpand(true).build();
         estado.add_named(&desplazable, Some("resultados"));
         estado.add_named(&cargando, Some("cargando"));
-        estado.add_named(&vacio, Some("vacio"));
+        estado.add_named(&pagina_vacia, Some("vacio"));
         estado.add_named(&pagina_error, Some("error"));
 
         let anterior = gtk::Button::builder().icon_name("go-previous-symbolic").tooltip_text("Página anterior").build();
         let siguiente = gtk::Button::builder().icon_name("go-next-symbolic").tooltip_text("Página siguiente").build();
-        let etiqueta_pagina = gtk::Label::builder().label("Página 1").width_chars(10).build();
+        // Las webs no dicen cuántas páginas hay: si se pasa, sale «Sin resultados».
+        let numero_pagina = gtk::SpinButton::with_range(1.0, 9999.0, 1.0);
+        numero_pagina.set_numeric(true);
+        numero_pagina.set_width_chars(4);
+        numero_pagina.set_tooltip_text(Some("Página a la que ir (escribe el número y pulsa Intro)"));
+        let etiqueta_pagina = gtk::Label::new(Some("Página"));
         let paginador = gtk::Box::builder()
             .spacing(12)
             .halign(gtk::Align::Center)
@@ -124,7 +130,10 @@ impl Explorar {
             .margin_bottom(10)
             .build();
         paginador.append(&anterior);
-        paginador.append(&etiqueta_pagina);
+        let ir_a = gtk::Box::builder().spacing(6).valign(gtk::Align::Center).build();
+        ir_a.append(&etiqueta_pagina);
+        ir_a.append(&numero_pagina);
+        paginador.append(&ir_a);
         paginador.append(&siguiente);
 
         let raiz = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -144,10 +153,11 @@ impl Explorar {
             rejilla,
             desplazable,
             estado,
+            pagina_vacia,
             pagina_error,
             anterior,
             siguiente,
-            etiqueta_pagina,
+            numero_pagina,
             pagina: Cell::new(1),
             peticion: Cell::new(0),
             resultados: RefCell::default(),
@@ -186,6 +196,18 @@ impl Explorar {
         {
             let con = con.clone();
             yo.siguiente.connect_clicked(move |_| con(&|yo| yo.buscar(yo.pagina.get() + 1)));
+        }
+        {
+            let con = con.clone();
+            yo.numero_pagina.connect_value_changed(move |n| {
+                let pagina = n.value_as_int().max(1) as u32;
+                con(&|yo| {
+                    // También salta cuando buscar() pone el número: entonces ya coincide.
+                    if pagina != yo.pagina.get() {
+                        yo.buscar(pagina);
+                    }
+                })
+            });
         }
         {
             let con = con.clone();
@@ -240,7 +262,7 @@ impl Explorar {
         let n = self.peticion.get() + 1;
         self.peticion.set(n);
         self.pagina.set(pagina);
-        self.etiqueta_pagina.set_label(&format!("Página {pagina}"));
+        self.numero_pagina.set_value(pagina as f64);
         self.anterior.set_sensitive(false);
         self.siguiente.set_sensitive(false);
         self.estado.set_visible_child_name("cargando");
@@ -258,6 +280,11 @@ impl Explorar {
             yo.anterior.set_sensitive(pagina > 1);
             match r {
                 Ok(resultados) if resultados.is_empty() => {
+                    yo.pagina_vacia.set_description(Some(if pagina > 1 {
+                        "No hay tantas páginas: prueba con un número más bajo."
+                    } else {
+                        "Prueba con otra búsqueda, categoría o resolución."
+                    }));
                     yo.estado.set_visible_child_name("vacio");
                 }
                 Ok(resultados) => {

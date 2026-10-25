@@ -50,6 +50,8 @@ Dónde queda cada cosa:
 | `~/.cache/fondos-animados/` | miniaturas, vistas previas, descargas a medias y capacidades del hardware |
 | `~/Vídeos/Fondos animados/30 fps/` | versiones de 30 fps (mismo nombre que el original) |
 | `~/.local/share/fondos-animados/biblioteca.db` | SQLite con fps, resolución, códec… de cada vídeo (se rehace sola si se borra) |
+| `~/.local/share/fondos-animados/descargas.db` | SQLite con la cola de descargas (sobrevive a cierres y caídas) |
+| `~/.config/systemd/user/fondos-animados-descargas.service` | servicio de usuario del gestor de descargas |
 | `~/.local/share/fondos-animados/web/` | cookies y datos del navegador integrado |
 
 ### Decodificación por GPU
@@ -73,9 +75,10 @@ Para comprobarlo: `fondo-animado-convertir --capacidades --forzar` (o la página
     El desplegable junto al buscador filtra por fps (más de 30, a 30 o menos, con las dos
     versiones, sin versión de 30). Ver [Versiones de 30 fps](#versiones-de-30-fps).
   - *Explorar*: elige la web, busca (en inglés) o elige categoría y resolución, y pasa de página
-    con las flechas (cada página sustituye a la anterior para no acumular memoria). Clic en un
-    resultado: vista previa y descarga.
+    con las flechas o escribe el número de la página a la que saltar (cada página sustituye a la
+    anterior para no acumular memoria). Clic en un resultado: vista previa y descarga.
   - *Navegador*: WebKit con sesión propia; cualquier descarga se importa sola a la biblioteca.
+  - *Cola de descargas* (botón de la barra de título): ver [Cola de descargas](#cola-de-descargas).
   - *Ajustes*: estado de la extensión, pausas, descargas, hardware detectado y estilo.
 - **Ajustes rápidos**: botón «Fondo animado» (activar/desactivar) con menú: pausar, elegir vídeo
   de la biblioteca, abrir la app.
@@ -91,6 +94,29 @@ Para comprobarlo: `fondo-animado-convertir --capacidades --forzar` (o la página
   fondo-animado on | off
   fondo-animado ajuste cover     # cover | contain | fill
   ```
+
+### Cola de descargas
+
+Lo que se descarga desde *Explorar* (y lo que se importa) entra en una cola guardada en SQLite.
+El trabajo lo hace el **gestor de descargas**, un proceso aparte (`fondos-animados
+--gestor-descargas`) que va como servicio de systemd de usuario
+(`fondos-animados-descargas.service`, lo instala y activa `install.sh`):
+
+- Si se cierra o se cae la app, el gestor sigue.
+- Si se cae el gestor, systemd lo vuelve a arrancar y continúa las descargas a medias desde
+  donde iban (y la app también lo arranca si lo echa en falta).
+- Al iniciar sesión arranca solo y sigue con lo que quedara en la cola (por ejemplo, tras
+  apagar el equipo). Cuando no queda nada que hacer, se cierra.
+- Sin systemd de usuario, la app lo lanza ella misma.
+
+- Las descargas van **de una en una**, en el orden de la lista; mientras se importa una, ya se
+  está bajando la siguiente.
+- Cada una se puede **pausar** (se reanuda donde se quedó), **subir o bajar** en la cola,
+  **cancelar**, **reintentar** (si falló o se canceló) y **quitar** de la lista.
+- Un vídeo que ya está en la cola no se añade otra vez; si estaba con error o cancelado, se
+  vuelve a intentar.
+- Las descargas del *Navegador* las hace WebKit dentro de la app (se pierden si se cierra); al
+  terminar, entran en la cola para importarse.
 
 ### Al descargar o importar
 
@@ -160,6 +186,8 @@ final con el principio para que no se note el salto), `-c` códec (`auto`, `av1`
 | Ver ese registro | `journalctl --user -b -f \| grep -i 'fondos animados'` |
 | Registro de la app (peticiones HTTP, scripts lanzados, capacidades) | `FONDOS_ANIMADOS_DEBUG=1 fondos-animados` (o la misma clave `debug`) |
 | Abrir la app en una pestaña concreta | `FONDOS_ANIMADOS_PAGINA=explorar fondos-animados` (`biblioteca`, `explorar`, `navegador`, `ajustes`) |
+| Registro del gestor de descargas | `journalctl --user -u fondos-animados-descargas -f` (si lo lanzó la app sin systemd: `~/.cache/fondos-animados/gestor-descargas.log`) |
+| Ver la cola de descargas | `sqlite3 ~/.local/share/fondos-animados/descargas.db 'SELECT id, nombre, estado, hecho, total, mensaje FROM trabajos ORDER BY orden'` |
 | Comprobar que las webs siguen funcionando | `fondos-animados --probar-fuentes` (busca en cada web y enseña el enlace de descarga) |
 | Probar el reproductor suelto, en una ventana | `fondos-animados-renderer --monitors 1280x540 --video vídeo.mp4 --debug` |
 | Hardware de vídeo | `fondo-animado-convertir --capacidades --forzar` |

@@ -46,50 +46,64 @@ pub fn bytes(url: &str, referer: Option<&str>) -> Result<Vec<u8>, String> {
 }
 
 /// Descarga a `destino`, avisando del progreso (bytes, total si se conoce). Devuelve el nombre
-/// de fichero que propone el servidor (Content-Disposition), si lo hay. `cancelado` se consulta
-/// entre bloques.
+/// de fichero que propone el servidor (Content-Disposition), si lo hay. Si `destino` ya tiene
+/// datos (una descarga pausada), se pide el resto con Range y se sigue donde se quedó. `parar`
+/// se consulta entre bloques; al parar, lo descargado se queda en `destino`.
 pub fn descargar(
     url: &str,
     referer: Option<&str>,
     destino: &Path,
     progreso: &dyn Fn(u64, Option<u64>),
-    cancelado: &dyn Fn() -> bool,
+    parar: &dyn Fn() -> bool,
 ) -> Result<Option<String>, String> {
-    crate::depurar!("descarga {url} → {}", destino.display());
+    let ya = std::fs::metadata(destino).map(|m| m.len()).unwrap_or(0);
+    crate::depurar!("descarga {url} → {} (desde {ya})", destino.display());
     let mut peticion = agente().get(url);
     if let Some(r) = referer {
         peticion = peticion.header("Referer", r);
     }
-    let respuesta = peticion.call().map_err(|e| format!("{url}: {e}"))?;
-    let total = respuesta
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok());
-    let nombre = respuesta
-        .headers()
-        .get("content-disposition")
-        .and_then(|v| v.to_str().ok())
-        .and_then(nombre_disposicion);
-    let tipo = respuesta
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    if tipo.starts_with("text/html") {
+    if ya > 0 {
+        peticion = peticion.header("Range", format!("bytes={ya}-"));
+    }
+    let respuesta = match peticion.call() {
+        Err(ureq::Error::StatusCode(416)) if ya > 0 => {
+            // Lo que había ya no encaja con el fichero del servidor: desde el principio.
+            std::fs::remove_file(destino).map_err(|e| e.to_string())?;
+            return descargar(url, referer, destino, progreso, parar);
+        }
+        r => r.map_err(|e| format!("{url}: {e}"))?,
+    };
+    let cabecera = |nombre: &str| respuesta.headers().get(nombre).and_then(|v| v.to_str().ok());
+    let parcial = ya > 0 && respuesta.status() == 206;
+    let inicio = if parcial { ya } else { 0 };
+    let longitud: Option<u64> = cabecera("content-length").and_then(|v| v.parse().ok());
+    let total = match parcial {
+        // Content-Range: bytes 1000-1999/2000
+        true => cabecera("content-range")
+            .and_then(|v| v.rsplit('/').next())
+            .and_then(|v| v.parse().ok())
+            .or(longitud.map(|l| l + inicio)),
+        false => longitud,
+    };
+    let nombre = cabecera("content-disposition").and_then(nombre_disposicion);
+    if cabecera("content-type").unwrap_or("").starts_with("text/html") {
         return Err("la web ha devuelto una página en lugar del vídeo".into());
     }
 
     let mut lector = respuesta.into_body().into_reader();
-    let mut fichero = std::fs::File::create(destino).map_err(|e| e.to_string())?;
+    let mut fichero = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(parcial)
+        .truncate(!parcial)
+        .open(destino)
+        .map_err(|e| e.to_string())?;
     let mut bufer = vec![0u8; 256 * 1024];
-    let mut hecho = 0u64;
+    let mut hecho = inicio;
+    progreso(hecho, total);
     loop {
-        if cancelado() {
-            drop(fichero);
-            let _ = std::fs::remove_file(destino);
-            return Err("cancelada".into());
+        if parar() {
+            return Err("parada".into());
         }
         let n = lector.read(&mut bufer).map_err(|e| e.to_string())?;
         if n == 0 {

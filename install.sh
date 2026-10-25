@@ -16,7 +16,8 @@
 #      (si es una release descomprimida) o compilándolos (si es un clon o no hay binarios que
 #      funcionen aquí).
 #   3. Copia todo a tu usuario: ~/.local/bin, la extensión de GNOME Shell, el esquema de
-#      ajustes, el lanzador y el icono. No instala nada fuera de tu home salvo los paquetes.
+#      ajustes, el lanzador, el icono y el servicio de systemd de usuario del gestor de
+#      descargas. No instala nada fuera de tu home salvo los paquetes.
 #
 # Todo va dentro de main() para que bash lea el script entero antes de ejecutarlo: así
 # funciona con «curl | bash» y las preguntas se leen de /dev/tty.
@@ -29,6 +30,8 @@ ESQUEMA="org.gnome.shell.extensions.animated-wallpaper"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 DATOS="${XDG_DATA_HOME:-$HOME/.local/share}"
 EXT_DIR="$DATOS/gnome-shell/extensions/$UUID"
+SERVICIO="fondos-animados-descargas.service"
+SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 PROGRAMAS=(fondos-animados fondos-animados-renderer)
 SCRIPTS=(fondo-animado fondo-animado-convertir fondo-animado-miniatura fondo-animado-sin-audio)
 
@@ -296,6 +299,21 @@ instalar_ficheros() {
     "$BIN_DIR/fondos-animados" --version >"$DATOS/fondos-animados/version" 2>/dev/null || true
 }
 
+# Gestor de descargas como servicio de usuario: arranca al iniciar sesión (sigue con la cola que
+# quedara) y systemd lo relanza si se cae. Sin systemd, la app lo lanza ella misma.
+instalar_servicio() {
+    titulo "Gestor de descargas"
+    mkdir -p "$SYSTEMD_DIR"
+    sed "s|@BIN_DIR@|$BIN_DIR|g" "$ORIGEN/data/$SERVICIO" >"$SYSTEMD_DIR/$SERVICIO"
+    if systemctl --user daemon-reload 2>/dev/null && systemctl --user enable "$SERVICIO" 2>/dev/null; then
+        # Si estaba en marcha, con el programa nuevo (lo que bajaba sigue donde se quedó).
+        systemctl --user try-restart "$SERVICIO" 2>/dev/null || true
+        info "Servicio de usuario $SERVICIO activado"
+    else
+        aviso "no se pudo activar $SERVICIO (¿sin systemd de usuario?): la app lanzará el gestor ella misma"
+    fi
+}
+
 activar_extension() {
     titulo "Extensión de GNOME Shell"
     if gnome-extensions enable "$UUID" 2>/dev/null; then
@@ -320,6 +338,9 @@ activar_extension() {
 desinstalar() {
     titulo "Desinstalando Fondos animados"
     gnome-extensions disable "$UUID" 2>/dev/null || true
+    systemctl --user disable --now "$SERVICIO" 2>/dev/null || true
+    rm -f "$SYSTEMD_DIR/$SERVICIO"
+    systemctl --user daemon-reload 2>/dev/null || true
     for b in "${PROGRAMAS[@]}" "${SCRIPTS[@]}"; do rm -f "$BIN_DIR/$b"; done
     rm -rf "$EXT_DIR" "$DATOS/fondos-animados" "$HOME/.cache/fondos-animados"
     rm -f "$DATOS/applications/$ID_APP.desktop" "$DATOS/icons/hicolor/scalable/apps/$ID_APP.svg"
@@ -352,6 +373,7 @@ main() {
     dependencias
     conseguir_binarios
     instalar_ficheros
+    instalar_servicio
     activar_extension
 
     titulo "Hardware de vídeo de este equipo"

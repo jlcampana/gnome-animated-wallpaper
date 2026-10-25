@@ -3,12 +3,14 @@
 
 mod bd;
 mod biblioteca;
+mod cola;
 mod config;
 mod contexto;
 mod convertir;
 mod descargas;
 mod explorar;
 mod fuentes;
+mod gestor;
 mod importar;
 mod navegador;
 mod pagina_ajustes;
@@ -215,14 +217,18 @@ fn construir(app: &adw::Application) {
         );
     }
 
-    // Al cerrar con descargas en marcha, avisar.
+    // Al cerrar con descargas del navegador en marcha, avisar (las de la cola las sigue el
+    // gestor de descargas, aunque se cierre la ventana).
     {
         let descargas = descargas.clone();
         ventana.connect_close_request(move |v| {
             if !descargas.hay_activas() {
                 return glib::Propagation::Proceed;
             }
-            let d = adw::AlertDialog::new(Some("Hay descargas en curso"), Some("Si cierras ahora, se perderán."));
+            let d = adw::AlertDialog::new(
+                Some("Hay descargas del navegador en curso"),
+                Some("Si cierras ahora, se perderán. Las de la cola de descargas siguen aunque cierres."),
+            );
             d.add_responses(&[("seguir", "Seguir"), ("cerrar", "Cerrar igualmente")]);
             d.set_response_appearance("cerrar", adw::ResponseAppearance::Destructive);
             let v2 = v.clone();
@@ -268,6 +274,12 @@ fn main() -> glib::ExitCode {
     if std::env::args().nth(1).as_deref() == Some("--version") {
         println!("fondos-animados {}", env!("CARGO_PKG_VERSION"));
         return glib::ExitCode::SUCCESS;
+    }
+    if std::env::args().nth(1).as_deref() == Some("--gestor-descargas") {
+        return match gestor::ejecutar() {
+            std::process::ExitCode::SUCCESS => glib::ExitCode::SUCCESS,
+            _ => glib::ExitCode::FAILURE,
+        };
     }
     if std::env::args().nth(1).as_deref() == Some("--probar-fuentes") {
         config::activar_depuracion(true);
