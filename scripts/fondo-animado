@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# fondo-animado: control del fondo animado desde la terminal.
+#
+#   fondo-animado                 estado actual
+#   fondo-animado lista           vídeos de la biblioteca
+#   fondo-animado poner VIDEO     usa VIDEO (ruta o nombre de la biblioteca) y activa
+#   fondo-animado siguiente       pasa al siguiente vídeo de la biblioteca
+#   fondo-animado aleatorio       uno al azar de la biblioteca
+#   fondo-animado on | off        activa / desactiva
+#   fondo-animado ajuste MODO     cover | contain | fill
+set -euo pipefail
+
+ESQUEMA=org.gnome.shell.extensions.animated-wallpaper
+g() { gsettings "$1" "$ESQUEMA" "${@:2}"; }
+quitar_comillas() { sed -e "s/^'//" -e "s/'$//"; }
+
+biblioteca() {
+    local dir
+    dir=$(g get library-dir | quitar_comillas)
+    if [[ -z $dir ]]; then
+        dir=$(xdg-user-dir VIDEOS 2>/dev/null || echo "$HOME/Videos")/"Fondos animados"
+    fi
+    echo "$dir"
+}
+
+videos() {
+    find "$(biblioteca)" -maxdepth 1 -type f \
+        \( -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.m4v' \) \
+        2>/dev/null | sort
+}
+
+poner() {
+    local v=$1
+    if [[ ! -f $v ]]; then
+        v=$(videos | grep -iF -- "$1" | head -1 || true)
+        [[ -n $v ]] || { echo "no encuentro «$1» en $(biblioteca)" >&2; exit 1; }
+    fi
+    v=$(realpath "$v")
+    g set video "$v"
+    g set enabled true
+    echo "fondo: $(basename "$v")"
+}
+
+case "${1:-estado}" in
+    estado)
+        echo "activo:     $(g get enabled)"
+        echo "vídeo:      $(g get video | quitar_comillas)"
+        echo "ajuste:     $(g get fit | quitar_comillas)"
+        echo "biblioteca: $(biblioteca) ($(videos | wc -l) vídeos)"
+        ;;
+    lista) videos | while read -r v; do basename "$v"; done ;;
+    poner) poner "${2:?falta el vídeo}" ;;
+    siguiente)
+        actual=$(g get video | quitar_comillas)
+        mapfile -t lista < <(videos)
+        ((${#lista[@]})) || { echo "la biblioteca está vacía" >&2; exit 1; }
+        siguiente=${lista[0]}
+        for i in "${!lista[@]}"; do
+            [[ ${lista[i]} == "$actual" ]] && siguiente=${lista[(i + 1) % ${#lista[@]}]}
+        done
+        poner "$siguiente"
+        ;;
+    aleatorio)
+        v=$(videos | shuf -n 1)
+        [[ -n $v ]] || { echo "la biblioteca está vacía" >&2; exit 1; }
+        poner "$v"
+        ;;
+    on) g set enabled true ;;
+    off) g set enabled false ;;
+    ajuste) g set fit "${2:?falta el modo: cover, contain o fill}" ;;
+    -h|--help|ayuda) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) echo "orden desconocida: $1 (prueba «fondo-animado ayuda»)" >&2; exit 1 ;;
+esac

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# fondo-animado-miniatura: saca un fotograma (al 20 % del vídeo) como JPEG de 480 px de ancho.
+#
+#   fondo-animado-miniatura VIDEO SALIDA.jpg
+set -euo pipefail
+
+(($# == 2)) || { sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+video=$1 salida=$2
+dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$video" 2>/dev/null || echo 0)
+punto=$(awk -v d="${dur:-0}" 'BEGIN { printf "%.2f", (d > 0 ? d * 0.2 : 0) }')
+mkdir -p "$(dirname "$salida")"
+ffmpeg -y -nostats -loglevel error -ss "$punto" -i "$video" -frames:v 1 \
+    -vf "scale=480:-2:flags=lanczos" -q:v 4 "$salida"

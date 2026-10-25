@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="cielo" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7b5cff"/>
+      <stop offset="0.55" stop-color="#e45ba8"/>
+      <stop offset="1" stop-color="#ffb36b"/>
+    </linearGradient>
+    <linearGradient id="marco" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3d3846"/>
+      <stop offset="1" stop-color="#241f31"/>
+    </linearGradient>
+    <clipPath id="pantalla"><rect x="14" y="20" width="100" height="70" rx="6"/></clipPath>
+  </defs>
+  <rect x="8" y="14" width="112" height="90" rx="12" fill="url(#marco)"/>
+  <rect x="8" y="100" width="112" height="6" rx="3" fill="#000" opacity="0.15"/>
+  <g clip-path="url(#pantalla)">
+    <rect x="14" y="20" width="100" height="70" fill="url(#cielo)"/>
+    <circle cx="86" cy="44" r="12" fill="#fff4d6" opacity="0.95"/>
+    <path d="M14 74 C34 62 46 66 60 72 S92 82 114 66 V90 H14 Z" fill="#3a2a6b" opacity="0.85"/>
+    <path d="M14 82 C36 74 52 80 70 84 S98 88 114 80 V90 H14 Z" fill="#1d1640"/>
+  </g>
+  <circle cx="44" cy="48" r="17" fill="#000" opacity="0.35"/>
+  <path d="M39 39 L55 48 L39 57 Z" fill="#fff"/>
+</svg>

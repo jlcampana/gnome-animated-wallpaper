@@ -1,0 +1,4 @@
+/target
+/dist
+/bin
+extension/*/schemas/gschemas.compiled

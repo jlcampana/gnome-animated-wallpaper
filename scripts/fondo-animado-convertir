@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# fondo-animado-convertir: prepara un vídeo para usarlo de fondo animado.
+#
+#   fondo-animado-convertir [opciones] ENTRADA SALIDA.mp4
+#
+#   -r, --resolucion WxH   tamaño final (p. ej. 2560x1080); «original» lo deja igual
+#   -a, --ajuste MODO      cubrir (recorta para llenar, por defecto) | encajar (bandas negras)
+#                          | estirar
+#   -f, --fps N            fotogramas por segundo («original» por defecto)
+#   -i, --inicio S         empieza en el segundo S
+#   -d, --duracion S       dura S segundos como mucho
+#   -b, --fundido S        funde el final con el principio durante S segundos para que el
+#                          bucle no dé salto (0 = no)
+#   -c, --codec C          auto (por defecto: el recomendado para este equipo) | av1 | hevc
+#                          | vp9 | h264
+#       --cpu              codifica con la CPU aunque haya codificador en la GPU
+#   -q, --calidad N        QP/CRF: menos es mejor calidad y más peso (24 por defecto)
+#       --progreso         imprime «DURACION <s>», «CODIFICADOR <x>» y el progreso de ffmpeg
+#
+#   fondo-animado-convertir --capacidades [--forzar]
+#       qué decodifica la GPU, qué codifica de verdad (prueba de 0,2 s por codificador) y el
+#       formato recomendado. Se guarda en ~/.cache/fondos-animados/capacidades.
+#
+# El resultado nunca lleva audio. Si la GPU no puede codificar el códec pedido (hay GPU que
+# solo decodifican, como la Radeon RX 6400), se usa la CPU.
+set -euo pipefail
+
+uso() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# ── Capacidades del equipo ───────────────────────────────────────────────────
+CACHE_CAP="${XDG_CACHE_HOME:-$HOME/.cache}/fondos-animados/capacidades"
+ORDEN_CODECS=(av1 hevc vp9 h264)          # de más a menos eficiente
+declare -A DEC_GST=([h264]="vah264dec nvh264dec" [hevc]="vah265dec nvh265dec"
+                    [vp9]="vavp9dec nvvp9dec" [av1]="vaav1dec nvav1dec")
+declare -A ENC_GPU=([h264]="h264_vaapi h264_nvenc" [hevc]="hevc_vaapi hevc_nvenc"
+                    [vp9]="vp9_vaapi" [av1]="av1_vaapi av1_nvenc")
+declare -A ENC_CPU=([h264]=libx264 [hevc]=libx265 [vp9]=libvpx-vp9 [av1]=libsvtav1)
+
+dispositivo=/dev/dri/renderD128
+for d in /dev/dri/renderD*; do [[ -e $d ]] && { dispositivo=$d; break; }; done
+
+# ¿Funciona de verdad este codificador? (ffmpeg lista los VA-API aunque la GPU no los tenga)
+prueba_codificador() {
+    local enc=$1 hw=() vf=format=yuv420p
+    case "$enc" in
+        *_vaapi) hw=(-vaapi_device "$dispositivo"); vf="format=nv12,hwupload" ;;
+    esac
+    timeout 15 ffmpeg -nostdin -v error "${hw[@]}" -f lavfi -i color=c=gray:s=320x240:r=30:d=0.2 \
+        -vf "$vf" -c:v "$enc" -f null - >/dev/null 2>&1
+}
+
+detectar_capacidades() {
+    local c el enc decod=() cod_gpu=() recomendado="" codificador=""
+    for c in "${ORDEN_CODECS[@]}"; do
+        for el in ${DEC_GST[$c]}; do
+            if gst-inspect-1.0 --exists "$el" 2>/dev/null; then decod+=("$c"); break; fi
+        done
+    done
+    for c in "${ORDEN_CODECS[@]}"; do
+        for enc in ${ENC_GPU[$c]}; do
+            prueba_codificador "$enc" && cod_gpu+=("$enc")
+        done
+    done
+    # Recomendado: el más eficiente que la GPU decodifica y codifica; si no hay, el mejor que
+    # decodifica (sin AV1 por CPU: es muy lento), codificado con la CPU.
+    for c in "${ORDEN_CODECS[@]}"; do
+        [[ " ${decod[*]} " == *" $c "* ]] || continue
+        for enc in "${cod_gpu[@]}"; do
+            if [[ $enc == "${c}_"* ]]; then recomendado=$c codificador=$enc; break 2; fi
+        done
+    done
+    if [[ -z $recomendado ]]; then
+        for c in hevc h264 vp9; do
+            if [[ " ${decod[*]} " == *" $c "* ]]; then recomendado=$c; break; fi
+        done
+        recomendado=${recomendado:-h264}
+        codificador=${ENC_CPU[$recomendado]}
+    fi
+    echo "equipo $(hostname 2>/dev/null || cat /etc/hostname)"
+    echo "decodifica-gpu ${decod[*]}"
+    echo "codifica-gpu ${cod_gpu[*]}"
+    echo "recomendado $recomendado"
+    echo "codificador $codificador"
+}
+
+capacidades() {  # $1 = forzar (1/0)
+    if [[ ${1:-0} == 0 && -f $CACHE_CAP ]] &&
+        grep -qx "equipo $(hostname 2>/dev/null || cat /etc/hostname)" "$CACHE_CAP" &&
+        [[ -n $(find "$CACHE_CAP" -mtime -7 2>/dev/null) ]]; then
+        cat "$CACHE_CAP"
+        return
+    fi
+    mkdir -p "$(dirname "$CACHE_CAP")"
+    detectar_capacidades | tee "$CACHE_CAP"
+}
+
+if [[ ${1:-} == --capacidades ]]; then
+    capacidades "$([[ ${2:-} == --forzar ]] && echo 1 || echo 0)"
+    exit 0
+fi
+
+resolucion=original ajuste=cubrir fps=original inicio=0 duracion=0 fundido=0
+codec=auto calidad=24 progreso=0 solo_cpu=0
+args=()
+while (($#)); do
+    case "$1" in
+        -r|--resolucion) resolucion=$2; shift ;;
+        -a|--ajuste) ajuste=$2; shift ;;
+        -f|--fps) fps=$2; shift ;;
+        -i|--inicio) inicio=$2; shift ;;
+        -d|--duracion) duracion=$2; shift ;;
+        -b|--fundido) fundido=$2; shift ;;
+        -c|--codec) codec=$2; shift ;;
+        -q|--calidad) calidad=$2; shift ;;
+        --progreso) progreso=1 ;;
+        --cpu) solo_cpu=1 ;;
+        -h|--help) uso ;;
+        -*) echo "opción desconocida: $1" >&2; uso 1 ;;
+        *) args+=("$1") ;;
+    esac
+    shift
+done
+((${#args[@]} == 2)) || uso 1
+entrada=${args[0]} salida=${args[1]}
+[[ -f $entrada ]] || { echo "no existe: $entrada" >&2; exit 1; }
+
+sonda() { ffprobe -v error -select_streams v:0 -show_entries "$1" -of csv=p=0 "$entrada" | head -1; }
+dur_total=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$entrada")
+fps_origen=$(sonda stream=avg_frame_rate)
+[[ $fps_origen == 0/0 || -z $fps_origen ]] && fps_origen=$(sonda stream=r_frame_rate)
+
+# Duración del tramo que se usa.
+dur=$(awk -v t="$dur_total" -v i="$inicio" -v d="$duracion" \
+    'BEGIN { r = t - i; if (d > 0 && d < r) r = d; if (r < 0) r = 0; printf "%.3f", r }')
+awk -v d="$dur" -v f="$fundido" 'BEGIN { exit !(d > 0 && 2 * f < d) }' ||
+    { echo "el tramo ($dur s) es demasiado corto para un fundido de $fundido s" >&2; exit 1; }
+
+# ── Filtros de imagen ────────────────────────────────────────────────────────
+filtros=()
+if [[ $fps != original ]]; then
+    filtros+=("fps=$fps")
+elif [[ $fundido != 0 ]]; then
+    filtros+=("fps=$fps_origen")   # xfade necesita una cadencia constante
+fi
+if [[ $resolucion == original ]]; then
+    filtros+=("scale=trunc(iw/2)*2:trunc(ih/2)*2")
+else
+    w=${resolucion%x*} h=${resolucion#*x}
+    case "$ajuste" in
+        cubrir) filtros+=("scale=$w:$h:force_original_aspect_ratio=increase:flags=lanczos"
+                          "crop=$w:$h") ;;
+        encajar) filtros+=("scale=$w:$h:force_original_aspect_ratio=decrease:flags=lanczos"
+                           "pad=$w:$h:(ow-iw)/2:(oh-ih)/2:black") ;;
+        estirar) filtros+=("scale=$w:$h:flags=lanczos") ;;
+        *) echo "ajuste desconocido: $ajuste" >&2; exit 1 ;;
+    esac
+fi
+filtros+=("setsar=1")
+cadena=$(IFS=,; echo "${filtros[*]}")
+
+# Bucle sin salto: el tramo empieza en el segundo F y sus últimos F segundos se funden con
+# los F primeros, así el último fotograma enlaza con el primero.
+if [[ $fundido != 0 ]]; then
+    offset=$(awk -v d="$dur" -v f="$fundido" 'BEGIN { printf "%.3f", d - 2 * f }')
+    grafo="[0:v]$cadena,split[a][b];[a]trim=start=$fundido,setpts=PTS-STARTPTS[cuerpo];"
+    grafo+="[b]trim=end=$fundido,setpts=PTS-STARTPTS[cabeza];"
+    grafo+="[cuerpo][cabeza]xfade=transition=fade:duration=$fundido:offset=$offset"
+    dur_salida=$(awk -v d="$dur" -v f="$fundido" 'BEGIN { printf "%.3f", d - f }')
+else
+    grafo="[0:v]$cadena"
+    dur_salida=$dur
+fi
+
+codificar() {  # $1 = codificador de ffmpeg
+    local enc=$1 entrada_hw=() final="" opciones=()
+    case "$enc" in
+        *_vaapi)
+            entrada_hw=(-vaapi_device "$dispositivo")
+            final=",format=nv12,hwupload"
+            opciones=(-rc_mode CQP -qp "$calidad") ;;
+        *_nvenc) opciones=(-preset p5 -rc constqp -qp "$calidad" -pix_fmt yuv420p) ;;
+        libx264) opciones=(-preset slow -crf "$calidad" -pix_fmt yuv420p) ;;
+        libx265) opciones=(-preset medium -crf "$((calidad + 2))" -pix_fmt yuv420p
+                           -x265-params log-level=error) ;;
+        libvpx-vp9) opciones=(-b:v 0 -crf "$((calidad + 8))" -row-mt 1 -pix_fmt yuv420p) ;;
+        libsvtav1) opciones=(-preset 8 -crf "$((calidad + 8))" -pix_fmt yuv420p) ;;
+        *) echo "codificador desconocido: $enc" >&2; return 1 ;;
+    esac
+    [[ $enc == hevc_* || $enc == libx265 ]] && opciones+=(-tag:v hvc1)
+    local extra=(-nostats -loglevel error)
+    ((progreso)) && extra+=(-progress pipe:1)
+    ((progreso)) && echo "CODIFICADOR $enc"
+    # En segundo plano + wait: así un SIGTERM (botón Cancelar de la app) llega al trap y
+    # este mata a ffmpeg, en vez de esperar a que acabe.
+    ffmpeg -nostdin -y "${extra[@]}" "${entrada_hw[@]}" -ss "$inicio" -t "$dur" -i "$entrada" \
+        -filter_complex "$grafo$final[v]" -map "[v]" -an -sn -dn \
+        -c:v "$enc" "${opciones[@]}" -g 120 -movflags +faststart "$salida" &
+    hijo=$!
+    wait "$hijo"
+}
+
+hijo=""
+trap '[[ -n $hijo ]] && kill "$hijo" 2>/dev/null; rm -f "$salida"; exit 130' TERM INT
+
+# Qué codificadores probar: los de GPU que funcionan para ese códec y, al final, la CPU.
+cap=$(capacidades 0)
+if [[ $codec == auto ]]; then
+    codec=$(awk '$1 == "recomendado" { print $2 }' <<<"$cap")
+fi
+[[ -n ${ENC_CPU[$codec]:-} ]] || { echo "códec desconocido: $codec" >&2; exit 1; }
+candidatos=()
+if ((!solo_cpu)); then
+    for enc in $(awk '$1 == "codifica-gpu" { $1 = ""; print }' <<<"$cap"); do
+        [[ $enc == "${codec}_"* ]] && candidatos+=("$enc")
+    done
+fi
+candidatos+=("${ENC_CPU[$codec]}")
+
+((progreso)) && echo "DURACION $dur_salida"
+for enc in "${candidatos[@]}"; do
+    if codificar "$enc"; then
+        ((progreso)) && echo "FIN"
+        exit 0
+    fi
+    ((progreso)) && echo "REINICIO"
+    echo "falló $enc; pruebo el siguiente" >&2
+done
+exit 1

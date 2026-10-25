@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Fondos animados
+GenericName=Fondos de escritorio animados
+Comment=Vídeos en bucle como fondo de escritorio: biblioteca, descargas y conversión
+Exec=fondos-animados
+Icon=io.github.jlcampana.FondosAnimados
+Terminal=false
+Categories=GNOME;GTK;Settings;DesktopSettings;Video;
+Keywords=wallpaper;fondo;animado;live;video;escritorio;wallpaper engine;
+StartupNotify=true
+SingleMainWindow=true

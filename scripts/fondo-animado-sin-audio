@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# fondo-animado-sin-audio: quita las pistas de audio (y subtítulos) de uno o varios vídeos,
+# sin recodificar la imagen. El fondo animado nunca suena: el audio solo ocupa disco.
+#
+#   fondo-animado-sin-audio VIDEO...     (sustituye cada vídeo en su sitio)
+#
+# Los vídeos sin audio se dejan como están. Termina con 0 si todo ha ido bien.
+set -uo pipefail
+
+(($#)) || { sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+
+estado=0
+for video in "$@"; do
+    [[ -f $video ]] || { echo "no existe: $video" >&2; estado=1; continue; }
+    pistas=$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$video" | wc -l)
+    if ((pistas == 0)); then
+        echo "sin audio: $video"
+        continue
+    fi
+    ext=${video##*.}
+    tmp="${video%.*}.sin-audio.tmp.$ext"
+    if ffmpeg -y -nostats -loglevel error -i "$video" -map 0:v:0 -c copy -an -sn -dn \
+            -movflags +faststart "$tmp"; then
+        antes=$(stat -c %s "$video") despues=$(stat -c %s "$tmp")
+        touch -r "$video" "$tmp"
+        mv -f "$tmp" "$video"
+        echo "audio quitado: $video ($(( (antes - despues) / 1024 )) KiB menos)"
+    else
+        rm -f "$tmp"
+        echo "no se pudo quitar el audio: $video" >&2
+        estado=1
+    fi
+done
+exit $estado

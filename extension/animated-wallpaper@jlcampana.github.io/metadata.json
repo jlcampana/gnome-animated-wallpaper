@@ -1,0 +1,9 @@
+{
+  "uuid": "animated-wallpaper@jlcampana.github.io",
+  "name": "Fondos animados",
+  "description": "Vídeos en bucle como fondo de escritorio, decodificados por la GPU. El vídeo lo reproduce un proceso aparte (fondos-animados-renderer) y la extensión lo coloca en el fondo del escritorio y de Actividades. Los vídeos se gestionan con la app Fondos animados.",
+  "session-modes": ["user", "unlock-dialog"],
+  "settings-schema": "org.gnome.shell.extensions.animated-wallpaper",
+  "url": "https://github.com/jlcampana/gnome-animated-wallpaper",
+  "shell-version": ["48", "49", "50", "51"]
+}
