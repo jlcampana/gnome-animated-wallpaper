@@ -16,9 +16,8 @@ y un botón en Ajustes rápidos.
   (para [VSThemes](https://vsthemes.org), que tiene captcha, o cualquier otra web), conversión y
   estilo claro/oscuro/automático.
 - **Scripts** (`fondo-animado*`): convertir, quitar audio, miniaturas y control desde la terminal.
-- **Media Controller** (`media-controller@jlcampana.github.io`): controles multimedia en la barra
-  superior. Es un **fork de [Advanced Media Controller](https://codeberg.org/sanjai-shaarugesh/Advanced-media-controller)**
-  de sanjai-shaarugesh (versión 6.6), con id propio y arreglos (ver [abajo](#media-controller)).
+- **Media Controller** ya no va aquí: se ha movido a su propio repo,
+  [mediaplayer-gnome-extension](https://github.com/jlcampana/mediaplayer-gnome-extension) (ver [abajo](#media-controller)).
 
 ## Instalar
 
@@ -249,27 +248,16 @@ herramientas/ empaquetado de releases
 
 ## Media Controller
 
-Fork de [Advanced Media Controller](https://codeberg.org/sanjai-shaarugesh/Advanced-media-controller)
-6.6, de sanjai-shaarugesh. Todo el mérito de la extensión es suyo; aquí solo cambia:
+La extensión de controles multimedia (fork de
+[Advanced Media Controller](https://codeberg.org/sanjai-shaarugesh/Advanced-media-controller))
+**se ha movido a su propio repo**, con todo su historial:
+[jlcampana/mediaplayer-gnome-extension](https://github.com/jlcampana/mediaplayer-gnome-extension). Este instalador ya no la instala ni la toca;
+si ya la tenías, sigue funcionando. Para instalarla o actualizarla:
 
-- **Id propio**: `media-controller@jlcampana.github.io`, esquema
-  `org.gnome.shell.extensions.media-controller` y dominio de traducciones `media-controller`,
-  para que no la pise una actualización de la original. El instalador desactiva la original si
-  estaba activa (las dos a la vez pondrían dos controles en la barra).
-- **Carpeta de temas**: la original los guarda en
-  `~/.local/share/gnome-shell/extensions/Advanced-media-controller-themes/`, y GNOME Shell
-  intenta cargar como extensión todo lo que hay ahí (en cada inicio de sesión salía «Could not
-  load extension Advanced-media-controller-themes: Missing metadata.json»). El fork los guarda
-  en `~/.local/share/media-controller/themes/` y, al activarse, mueve allí los de la carpeta
-  antigua si aún no hay ninguno.
-- **Temporizadores huérfanos**: cuando GNOME Shell destruye la barra de progreso desde C (al
-  cerrar el menú o abrir Actividades), no se llama a su `destroy()` de JS y el temporizador de
-  la animación (cada 33 ms) seguía vivo para siempre, repintando un actor ya destruido. Cada tic
-  dejaba un error con traza en el journal desde el hilo principal de GNOME Shell (unos 60 por
-  segundo, y subiendo) y la animación de Actividades daba tirones. Ahora se paran también con
-  la señal `destroy` (`utils/ui/ProgressSlider.js`).
+```bash
+curl -fsSL https://raw.githubusercontent.com/jlcampana/mediaplayer-gnome-extension/main/install.sh | bash
+```
 
 ## Licencia
 
-MIT, salvo `extension/media-controller@jlcampana.github.io/`, que es GPL-3.0 como la extensión
-original (ver su `LICENSE`). Los fondos que se descargan son de sus autores y de cada web; respeta sus condiciones.
+MIT. Los fondos que se descargan son de sus autores y de cada web; respeta sus condiciones.
