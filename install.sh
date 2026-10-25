@@ -283,7 +283,6 @@ instalar_ficheros() {
     sed "s|^Exec=.*|Exec=$BIN_DIR/fondos-animados|" "$ORIGEN/data/$ID_APP.desktop" >"$DATOS/applications/$ID_APP.desktop"
     cp "$ORIGEN/data/$ID_APP.svg" "$DATOS/icons/hicolor/scalable/apps/"
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$DATOS/applications" || true
-    command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f "$DATOS/icons/hicolor" 2>/dev/null || true
     info "Lanzador «Fondos animados» en el menú de aplicaciones"
 
     local videos
