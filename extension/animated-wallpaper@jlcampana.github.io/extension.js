@@ -360,7 +360,9 @@ export default class FondosAnimados extends Extension {
         global.window_manager.connectObject('size-changed', cola, 'minimize', cola,
             'unminimize', cola, 'map', cola, 'destroy', cola, this);
         global.workspace_manager.connectObject('active-workspace-changed', cola, this);
-        Main.overview.connectObject('showing', cola, 'hidden', cola, this);
+        // Al abrir Actividades se pausa en el acto (no en la cola de baja prioridad, que esperaría
+        // a que acabe la animación): así el vídeo no compite con ella. Al cerrarla, sigue.
+        Main.overview.connectObject('showing', () => this._actualizarPausa(), 'hidden', cola, this);
         Main.sessionMode.connectObject('updated', () => {
             if (this._indicador)
                 this._indicador.boton.visible = !Main.sessionMode.isLocked;
@@ -726,7 +728,7 @@ export default class FondosAnimados extends Extension {
         if (Main.sessionMode.isLocked)
             return this._ajustes.get_boolean('pause-locked');
         if (Main.overview.visible)
-            return false;
+            return true;
         const pantallaCompleta = this._ajustes.get_boolean('pause-fullscreen');
         const maximizada = this._ajustes.get_boolean('pause-maximized');
         if (!pantallaCompleta && !maximizada)
@@ -749,7 +751,7 @@ export default class FondosAnimados extends Extension {
         const pausar = this._debePausar();
         if (pausar === this._pausado || !this._proceso)
             return;
-        this._depurar(pausar ? 'pausa (pantallas tapadas, bloqueo o pausa manual)' : 'reanudo');
+        this._depurar(pausar ? 'pausa (pantallas tapadas, Actividades, bloqueo o pausa manual)' : 'reanudo');
         this._pausado = pausar;
         this._enviar(pausar ? 'pause' : 'play');
     }

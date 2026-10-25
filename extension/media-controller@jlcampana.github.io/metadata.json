@@ -1,0 +1,19 @@
+{
+  "description": "Fork of Advanced Media Controller by sanjai-shaarugesh (https://codeberg.org/sanjai-shaarugesh/Advanced-media-controller), version 6.6, with fixes from jlcampana.\n\nMedia controls for the GNOME Shell panel. Works with any MPRIS player (Spotify, VLC, Rhythmbox, browsers) and lets you switch between several players from tabs in the popup.\n\n* Play, pause, skip, shuffle and repeat\n* Track and artist in the panel with a scrolling label\n* Optional vinyl record effect on the album art, set per app (double-click the art)\n* Time-synced lyrics fetched from lrclib.net (single-click the art)\n* Seekable progress slider with selectable themes\n* Panel label font, colour and element order settings",
+  "gettext-domain": "media-controller",
+  "name": "Media Controller",
+  "settings-schema": "org.gnome.shell.extensions.media-controller",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
+  "url": "https://github.com/jlcampana/gnome-animated-wallpaper",
+  "uuid": "media-controller@jlcampana.github.io",
+  "version": 1,
+  "version-name": "6.6-jlcampana.1"
+}

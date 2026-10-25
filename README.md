@@ -5,8 +5,8 @@ una app para gestionar la biblioteca, buscar y descargar fondos de varias webs, 
 y un botón en Ajustes rápidos.
 
 - **Extensión de GNOME Shell** (GNOME 48–51): pone el vídeo en el fondo del escritorio y en
-  Actividades, lo pausa con ventanas a pantalla completa (o maximizadas, si quieres) y con la
-  sesión bloqueada, y añade un menú en Ajustes rápidos para cambiar de fondo o pausarlo.
+  Actividades (allí se queda en pausa para que la animación vaya fluida), lo pausa con ventanas
+  a pantalla completa (o maximizadas, si quieres) y con la sesión bloqueada, y añade un menú en Ajustes rápidos para cambiar de fondo o pausarlo.
 - **Reproductor** (`fondos-animados-renderer`, Rust + GStreamer): decodifica con VA-API
   (AMD/Intel) o NVDEC (NVIDIA) y entrega los fotogramas como DMABuf, sin pasar por la CPU. Un
   solo decodificador para todos los monitores.
@@ -16,6 +16,9 @@ y un botón en Ajustes rápidos.
   (para [VSThemes](https://vsthemes.org), que tiene captcha, o cualquier otra web), conversión y
   estilo claro/oscuro/automático.
 - **Scripts** (`fondo-animado*`): convertir, quitar audio, miniaturas y control desde la terminal.
+- **Media Controller** (`media-controller@jlcampana.github.io`): controles multimedia en la barra
+  superior. Es un **fork de [Advanced Media Controller](https://codeberg.org/sanjai-shaarugesh/Advanced-media-controller)**
+  de sanjai-shaarugesh (versión 6.6), con id propio y arreglos (ver [abajo](#media-controller)).
 
 ## Instalar
 
@@ -235,6 +238,24 @@ data/         lanzador .desktop e icono
 herramientas/ empaquetado de releases
 ```
 
+## Media Controller
+
+Fork de [Advanced Media Controller](https://codeberg.org/sanjai-shaarugesh/Advanced-media-controller)
+6.6, de sanjai-shaarugesh. Todo el mérito de la extensión es suyo; aquí solo cambia:
+
+- **Id propio**: `media-controller@jlcampana.github.io`, esquema
+  `org.gnome.shell.extensions.media-controller` y dominio de traducciones `media-controller`,
+  para que no la pise una actualización de la original. El instalador desactiva la original si
+  estaba activa (las dos a la vez pondrían dos controles en la barra). Los temas se siguen
+  guardando en la misma carpeta que la original, así que valen para las dos.
+- **Temporizadores huérfanos**: cuando GNOME Shell destruye la barra de progreso desde C (al
+  cerrar el menú o abrir Actividades), no se llama a su `destroy()` de JS y el temporizador de
+  la animación (cada 33 ms) seguía vivo para siempre, repintando un actor ya destruido. Cada tic
+  dejaba un error con traza en el journal desde el hilo principal de GNOME Shell (unos 60 por
+  segundo, y subiendo) y la animación de Actividades daba tirones. Ahora se paran también con
+  la señal `destroy` (`utils/ui/ProgressSlider.js`).
+
 ## Licencia
 
-MIT. Los fondos que se descargan son de sus autores y de cada web; respeta sus condiciones.
+MIT, salvo `extension/media-controller@jlcampana.github.io/`, que es GPL-3.0 como la extensión
+original (ver su `LICENSE`). Los fondos que se descargan son de sus autores y de cada web; respeta sus condiciones.

@@ -29,8 +29,8 @@ paquete() {  # $1 = etiqueta (fedora44…), $2 = carpeta con los binarios compil
     mkdir -p "$d/bin" "$d/extension" "$d/data"
     cp "$2/fondos-animados" "$2/fondos-animados-renderer" "$d/bin/"
     cp scripts/fondo-animado* "$d/bin/"
-    cp -r extension/animated-wallpaper@jlcampana.github.io "$d/extension/"
-    rm -f "$d/extension/animated-wallpaper@jlcampana.github.io/schemas/gschemas.compiled"
+    cp -r extension/*@jlcampana.github.io "$d/extension/"
+    rm -f "$d"/extension/*/schemas/gschemas.compiled
     cp data/* "$d/data/"
     cp install.sh README.md LICENSE "$d/"
     tar -czf "dist/$nombre.tar.gz" -C "$tmp" "$nombre"

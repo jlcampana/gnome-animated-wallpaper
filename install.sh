@@ -18,6 +18,8 @@
 #   3. Copia todo a tu usuario: ~/.local/bin, la extensión de GNOME Shell, el esquema de
 #      ajustes, el lanzador, el icono y el servicio de systemd de usuario del gestor de
 #      descargas. No instala nada fuera de tu home salvo los paquetes.
+#   4. Instala también «Media Controller», un fork de Advanced Media Controller (controles
+#      multimedia en la barra superior). Si estaba activa la original, la desactiva.
 #
 # Todo va dentro de main() para que bash lea el script entero antes de ejecutarlo: así
 # funciona con «curl | bash» y las preguntas se leen de /dev/tty.
@@ -30,6 +32,11 @@ ESQUEMA="org.gnome.shell.extensions.animated-wallpaper"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 DATOS="${XDG_DATA_HOME:-$HOME/.local/share}"
 EXT_DIR="$DATOS/gnome-shell/extensions/$UUID"
+# Fork de Advanced Media Controller (GPL-3.0), con su propio id para no chocar con la original.
+UUID_MEDIA="media-controller@jlcampana.github.io"
+ESQUEMA_MEDIA="org.gnome.shell.extensions.media-controller"
+EXT_MEDIA_DIR="$DATOS/gnome-shell/extensions/$UUID_MEDIA"
+UUID_MEDIA_ORIGINAL="advanced-media-controller@sanjai.com"
 SERVICIO="fondos-animados-descargas.service"
 SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 PROGRAMAS=(fondos-animados fondos-animados-renderer)
@@ -278,8 +285,14 @@ instalar_ficheros() {
     glib-compile-schemas "$EXT_DIR/schemas"
     info "Extensión → $EXT_DIR"
 
+    rm -rf "$EXT_MEDIA_DIR"
+    cp -r "$ORIGEN/extension/$UUID_MEDIA" "$EXT_MEDIA_DIR"
+    glib-compile-schemas "$EXT_MEDIA_DIR/schemas"
+    info "Media Controller (fork de Advanced Media Controller) → $EXT_MEDIA_DIR"
+
     mkdir -p "$DATOS/glib-2.0/schemas"
-    cp "$EXT_DIR/schemas/$ESQUEMA.gschema.xml" "$DATOS/glib-2.0/schemas/"
+    cp "$EXT_DIR/schemas/$ESQUEMA.gschema.xml" "$EXT_MEDIA_DIR/schemas/$ESQUEMA_MEDIA.gschema.xml" \
+        "$DATOS/glib-2.0/schemas/"
     glib-compile-schemas "$DATOS/glib-2.0/schemas"
 
     mkdir -p "$DATOS/applications" "$DATOS/icons/hicolor/scalable/apps"
@@ -314,11 +327,26 @@ instalar_servicio() {
     fi
 }
 
+activar_extensiones() {
+    titulo "Extensiones de GNOME Shell"
+    # Las dos a la vez pondrían dos controles multimedia en la barra.
+    if gnome-extensions list --enabled 2>/dev/null | grep -qx "$UUID_MEDIA_ORIGINAL"; then
+        gnome-extensions disable "$UUID_MEDIA_ORIGINAL" 2>/dev/null || true
+        info "Desactivada Advanced Media Controller (la sustituye el fork Media Controller)"
+    fi
+    local pendiente=0
+    activar_extension "$UUID" || pendiente=1
+    activar_extension "$UUID_MEDIA" || pendiente=1
+    ((pendiente)) && aviso "Cierra sesión y vuelve a entrar para que GNOME Shell cargue las extensiones."
+    return 0
+}
+
+# Devuelve 1 si hace falta volver a iniciar sesión para que cargue.
 activar_extension() {
-    titulo "Extensión de GNOME Shell"
+    local UUID=$1
     if gnome-extensions enable "$UUID" 2>/dev/null; then
-        info "Activada"
-        return
+        info "$UUID activada"
+        return 0
     fi
     # GNOME Shell aún no la conoce (solo mira las extensiones al iniciar sesión): se deja
     # en la lista de activas para que arranque en el próximo inicio de sesión.
@@ -332,22 +360,24 @@ activar_extension() {
         fi
         gsettings set org.gnome.shell enabled-extensions "$activas" 2>/dev/null || true
     fi
-    aviso "Cierra sesión y vuelve a entrar para que GNOME Shell cargue la extensión."
+    return 1
 }
 
 desinstalar() {
     titulo "Desinstalando Fondos animados"
     gnome-extensions disable "$UUID" 2>/dev/null || true
+    gnome-extensions disable "$UUID_MEDIA" 2>/dev/null || true
     systemctl --user disable --now "$SERVICIO" 2>/dev/null || true
     rm -f "$SYSTEMD_DIR/$SERVICIO"
     systemctl --user daemon-reload 2>/dev/null || true
     for b in "${PROGRAMAS[@]}" "${SCRIPTS[@]}"; do rm -f "$BIN_DIR/$b"; done
-    rm -rf "$EXT_DIR" "$DATOS/fondos-animados" "$HOME/.cache/fondos-animados"
+    rm -rf "$EXT_DIR" "$EXT_MEDIA_DIR" "$DATOS/fondos-animados" "$HOME/.cache/fondos-animados"
     rm -f "$DATOS/applications/$ID_APP.desktop" "$DATOS/icons/hicolor/scalable/apps/$ID_APP.svg"
-    rm -f "$DATOS/glib-2.0/schemas/$ESQUEMA.gschema.xml"
+    rm -f "$DATOS/glib-2.0/schemas/$ESQUEMA.gschema.xml" "$DATOS/glib-2.0/schemas/$ESQUEMA_MEDIA.gschema.xml"
     [[ -d $DATOS/glib-2.0/schemas ]] && glib-compile-schemas "$DATOS/glib-2.0/schemas" 2>/dev/null || true
     info "Hecho. Tu biblioteca de vídeos y los ajustes (dconf) se quedan."
     info "Para borrar los ajustes: dconf reset -f /org/gnome/shell/extensions/animated-wallpaper/"
+    info "  y los de Media Controller: dconf reset -f /org/gnome/shell/extensions/media-controller/"
 }
 
 main() {
@@ -374,7 +404,7 @@ main() {
     conseguir_binarios
     instalar_ficheros
     instalar_servicio
-    activar_extension
+    activar_extensiones
 
     titulo "Hardware de vídeo de este equipo"
     "$BIN_DIR/fondo-animado-convertir" --capacidades --forzar 2>/dev/null | sed 's/^/   /' || true
