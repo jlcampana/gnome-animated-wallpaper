@@ -2,12 +2,20 @@
 # fondo-animado: control del fondo animado desde la terminal.
 #
 #   fondo-animado                 estado actual
-#   fondo-animado lista           vídeos de la biblioteca
-#   fondo-animado poner VIDEO     usa VIDEO (ruta o nombre de la biblioteca) y activa
-#   fondo-animado siguiente       pasa al siguiente vídeo de la biblioteca
+#   fondo-animado lista           fondos de la biblioteca (* el actual)
+#   fondo-animado poner VIDEO [original|30fps]
+#                                 usa VIDEO (ruta o nombre de la biblioteca) y activa; por
+#                                 nombre, en la versión preferida salvo que se diga otra
+#   fondo-animado siguiente       pasa al siguiente fondo de la biblioteca
 #   fondo-animado aleatorio       uno al azar de la biblioteca
+#   fondo-animado version [original|30fps]
+#                                 versión preferida cuando un fondo tiene las dos (sin
+#                                 argumento, la dice); el fondo actual pasa a ella
 #   fondo-animado on | off        activa / desactiva
 #   fondo-animado ajuste MODO     cover | contain | fill
+#
+# Un fondo es un vídeo de la biblioteca y, si la hay, su versión de 30 fps: la de la subcarpeta
+# «30 fps» con el mismo nombre (en .mp4).
 set -euo pipefail
 
 ESQUEMA=org.gnome.shell.extensions.animated-wallpaper
@@ -26,51 +34,119 @@ biblioteca() {
     echo "$dir"
 }
 
-videos() {
-    find "$(biblioteca)" -maxdepth 1 -type f \
+CARPETA_30="30 fps"
+SEP=$'\x1f'   # separador de campos que no es espacio: así los campos vacíos no se pierden
+
+videos_en() {
+    find "$1" -maxdepth 1 -type f \
         \( -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.m4v' \) \
-        2>/dev/null | sort
+        ! -name '*.tmp.*' ! -name '*.convirtiendo.*' ! -name '*.optimizando.*' 2>/dev/null | sort
 }
 
-poner() {
-    local v=$1
+nombre() { local b=${1##*/}; echo "${b%.*}"; }
+
+# Fondos, uno por línea y por nombre: «nombre SEP original SEP versión de 30» (uno de los dos
+# puede estar vacío). Igual que la app: cada original con la versión del mismo nombre.
+fondos() {
+    local dir v n
+    dir=$(biblioteca)
+    declare -A v30=()
+    while IFS= read -r v; do v30[$(nombre "$v")]=$v; done < <(videos_en "$dir/$CARPETA_30")
+    {
+        while IFS= read -r v; do
+            n=$(nombre "$v")
+            printf '%s\n' "$n$SEP$v$SEP${v30[$n]:-}"
+            unset "v30[$n]"
+        done < <(videos_en "$dir")
+        for n in "${!v30[@]}"; do printf '%s\n' "$n$SEP$SEP${v30[$n]}"; done
+    } | sort -f -t "$SEP" -k1,1
+}
+
+preferida() { g get preferred-version | quitar_comillas; }
+
+# La versión que se usa de un fondo: $1 original, $2 versión de 30, $3 original | 30fps.
+elegida() {
+    if [[ $3 == 30fps ]]; then echo "${2:-$1}"; else echo "${1:-$2}"; fi
+}
+
+es_version_30() { [[ $(basename "$(dirname "$1")") == "$CARPETA_30" ]]; }
+
+poner() {  # $1 ruta o nombre, $2 versión (opcional)
+    local v=$1 version=${2:-$(preferida)} n o t
+    [[ $version == original || $version == 30fps ]] ||
+        { echo "versión desconocida: $version (original o 30fps)" >&2; exit 1; }
     if [[ ! -f $v ]]; then
-        v=$(videos | grep -iF -- "$1" | head -1 || true)
+        v=""
+        while IFS=$SEP read -r n o t; do
+            if [[ ${n,,} == *"${1,,}"* ]]; then v=$(elegida "$o" "$t" "$version"); break; fi
+        done < <(fondos)
         [[ -n $v ]] || { echo "no encuentro «$1» en $(biblioteca)" >&2; exit 1; }
     fi
     v=$(realpath "$v")
     g set video "$v"
     g set enabled true
-    echo "fondo: $(basename "$v")"
+    echo "fondo: $(nombre "$v")$(es_version_30 "$v" && echo " (30 fps)" || true)"
 }
 
 case "${1:-estado}" in
     estado)
+        video=$(g get video | quitar_comillas)
+        mapfile -t lista < <(fondos)
+        con_30=$(printf '%s\n' "${lista[@]}" | awk -F "$SEP" '$2 != "" && $3 != ""' | wc -l)
         echo "activo:     $(g get enabled)"
-        echo "vídeo:      $(g get video | quitar_comillas)"
+        echo "vídeo:      $video$([[ -n $video ]] && es_version_30 "$video" && echo " (versión de 30 fps)" || true)"
+        echo "versión:    $(preferida) (la que se usa si un fondo tiene las dos)"
         echo "ajuste:     $(g get fit | quitar_comillas)"
-        echo "biblioteca: $(biblioteca) ($(videos | wc -l) vídeos)"
+        echo "biblioteca: $(biblioteca) (${#lista[@]} fondos, $con_30 con versión de 30 fps)"
         ;;
-    lista) videos | while read -r v; do basename "$v"; done ;;
-    poner) poner "${2:?falta el vídeo}" ;;
+    lista)
+        actual=$(g get video | quitar_comillas)
+        while IFS=$SEP read -r n o t; do
+            marca="  "
+            [[ -n $actual && ($actual == "$o" || $actual == "$t") ]] && marca="* "
+            if [[ -n $o && -n $t ]]; then extra="  [original + 30 fps]"
+            elif [[ -z $o ]]; then extra="  [solo 30 fps]"
+            else extra=""; fi
+            echo "$marca$n$extra"
+        done < <(fondos)
+        ;;
+    poner) poner "${2:?falta el vídeo}" "${3:-}" ;;
     siguiente)
         actual=$(g get video | quitar_comillas)
-        mapfile -t lista < <(videos)
+        mapfile -t lista < <(fondos)
         ((${#lista[@]})) || { echo "la biblioteca está vacía" >&2; exit 1; }
-        siguiente=${lista[0]}
+        siguiente=0
         for i in "${!lista[@]}"; do
-            [[ ${lista[i]} == "$actual" ]] && siguiente=${lista[(i + 1) % ${#lista[@]}]}
+            IFS=$SEP read -r n o t <<<"${lista[i]}"
+            [[ $actual == "$o" || $actual == "$t" ]] && siguiente=$(((i + 1) % ${#lista[@]}))
         done
-        poner "$siguiente"
+        IFS=$SEP read -r n o t <<<"${lista[siguiente]}"
+        poner "$(elegida "$o" "$t" "$(preferida)")"
         ;;
     aleatorio)
-        v=$(videos | shuf -n 1)
-        [[ -n $v ]] || { echo "la biblioteca está vacía" >&2; exit 1; }
-        poner "$v"
+        f=$(fondos | shuf -n 1)
+        [[ -n $f ]] || { echo "la biblioteca está vacía" >&2; exit 1; }
+        IFS=$SEP read -r n o t <<<"$f"
+        poner "$(elegida "$o" "$t" "$(preferida)")"
+        ;;
+    version)
+        if [[ -z ${2:-} ]]; then preferida; exit 0; fi
+        [[ $2 == original || $2 == 30fps ]] || { echo "versión desconocida: $2 (original o 30fps)" >&2; exit 1; }
+        g set preferred-version "$2"
+        # La extensión cambia el fondo actual; aquí también, por si no está activa.
+        actual=$(g get video | quitar_comillas)
+        while IFS=$SEP read -r n o t; do
+            if [[ -n $actual && ($actual == "$o" || $actual == "$t") ]]; then
+                nuevo=$(elegida "$o" "$t" "$2")
+                [[ $nuevo != "$actual" ]] && g set video "$nuevo"
+                break
+            fi
+        done < <(fondos)
+        echo "versión preferida: $2"
         ;;
     on) g set enabled true ;;
     off) g set enabled false ;;
     ajuste) g set fit "${2:?falta el modo: cover, contain o fill}" ;;
-    -h|--help|ayuda) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+    -h|--help|ayuda) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
     *) echo "orden desconocida: $1 (prueba «fondo-animado ayuda»)" >&2; exit 1 ;;
 esac

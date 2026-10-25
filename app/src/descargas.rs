@@ -189,6 +189,7 @@ impl Descargas {
         estado: &gtk::Label,
     ) {
         let optimizar = self.ctx.optimizar_descargas();
+        let version_30 = self.ctx.ajustes.boolean("create-30fps");
         estado.set_label(match optimizar {
             Some(_) => "Adaptando el vídeo a la pantalla (puede tardar)…",
             None => "Preparando el vídeo (quitando audio, comprobando códec)…",
@@ -196,7 +197,7 @@ impl Descargas {
         let biblioteca = self.ctx.biblioteca();
         let sin_audio = self.ctx.ajustes.boolean("strip-audio");
         let r = gio::spawn_blocking(move || {
-            importar::importar(&fichero, &biblioteca, titulo.as_deref(), sin_audio, true, optimizar)
+            importar::importar(&fichero, &biblioteca, titulo.as_deref(), sin_audio, true, optimizar, version_30)
         })
         .await
         .unwrap_or_else(|_| Err("fallo interno".into()));
@@ -281,8 +282,11 @@ impl Descargas {
             glib::spawn_future_local(async move {
                 let biblioteca = yo.ctx.biblioteca();
                 let sin_audio = yo.ctx.ajustes.boolean("strip-audio");
+                let version_30 = yo.ctx.ajustes.boolean("create-30fps");
                 estado.set_label("Importando…");
-                let r = gio::spawn_blocking(move || importar::importar(&ruta, &biblioteca, None, sin_audio, false, None))
+                let r = gio::spawn_blocking(move || {
+                    importar::importar(&ruta, &biblioteca, None, sin_audio, false, None, version_30)
+                })
                     .await
                     .unwrap_or_else(|_| Err("fallo interno".into()));
                 match r {

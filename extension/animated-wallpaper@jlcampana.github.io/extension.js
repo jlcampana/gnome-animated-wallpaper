@@ -17,8 +17,10 @@ import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
+import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import {ensureActorVisibleInScrollView} from 'resource:///org/gnome/shell/misc/animationUtils.js';
 import * as Background from 'resource:///org/gnome/shell/ui/background.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {QuickMenuToggle, SystemIndicator} from 'resource:///org/gnome/shell/ui/quickSettings.js';
@@ -32,7 +34,7 @@ const REINTENTO_MS = 2000;
 const ICONO = 'video-x-generic-symbolic';
 const ID_APP = 'io.github.jlcampana.FondosAnimados';
 const EXTENSIONES_VIDEO = ['.mp4', '.webm', '.mkv', '.mov', '.m4v'];
-const MAX_VIDEOS_MENU = 15;
+const MAX_VIDEOS_MENU = 200;   // la lista tiene scroll; esto solo evita menús enormes
 
 function carpetaBiblioteca(ajustes) {
     const dir = ajustes.get_string('library-dir');
@@ -43,24 +45,61 @@ function carpetaBiblioteca(ajustes) {
     return GLib.build_filenamev([videos, 'Fondos animados']);
 }
 
-// Vídeos de la biblioteca, por nombre. Síncrono: es una carpeta local y pequeña.
-function listarVideos(ajustes) {
+const CARPETA_30 = '30 fps';   // versiones de 30 fps: mismo nombre que el original, en .mp4
+const TEMPORALES = ['.tmp.', '.convirtiendo.', '.optimizando.'];
+
+// Vídeos de una carpeta. Síncrono: es una carpeta local y pequeña.
+function videosEn(dir) {
     const videos = [];
     try {
-        const dir = Gio.File.new_for_path(carpetaBiblioteca(ajustes));
-        const e = dir.enumerate_children('standard::name,standard::type',
+        const carpeta = Gio.File.new_for_path(dir);
+        const e = carpeta.enumerate_children('standard::name,standard::type',
             Gio.FileQueryInfoFlags.NONE, null);
         for (let info; (info = e.next_file(null));) {
             const nombre = info.get_name();
+            const minusculas = nombre.toLowerCase();
             if (info.get_file_type() === Gio.FileType.REGULAR &&
-                EXTENSIONES_VIDEO.some(x => nombre.toLowerCase().endsWith(x)))
-                videos.push(dir.get_child(nombre).get_path());
+                EXTENSIONES_VIDEO.some(x => minusculas.endsWith(x)) &&
+                !TEMPORALES.some(t => nombre.includes(t)))
+                videos.push(carpeta.get_child(nombre).get_path());
         }
         e.close(null);
     } catch {
-        // Sin biblioteca todavía.
+        // Sin biblioteca (o sin versiones de 30 fps) todavía.
     }
-    return videos.sort((a, b) => a.localeCompare(b));
+    return videos;
+}
+
+// Fondos de la biblioteca, por nombre: {nombre, original, v30} (uno de los dos puede faltar).
+// Igual que en la app: cada original con la versión de 30 fps del mismo nombre.
+function listarFondos(ajustes) {
+    const dir = carpetaBiblioteca(ajustes);
+    const fondos = [];
+    const porNombre = new Map();
+    for (const ruta of videosEn(dir)) {
+        const fondo = {nombre: nombreVideo(ruta), original: ruta, v30: null};
+        if (!porNombre.has(fondo.nombre))
+            porNombre.set(fondo.nombre, fondo);
+        fondos.push(fondo);
+    }
+    for (const ruta of videosEn(GLib.build_filenamev([dir, CARPETA_30]))) {
+        const nombre = nombreVideo(ruta);
+        const fondo = porNombre.get(nombre);
+        if (fondo && !fondo.v30)
+            fondo.v30 = ruta;
+        else
+            fondos.push({nombre, original: null, v30: ruta});
+    }
+    return fondos.sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+const esVersion30 = ruta => GLib.path_get_basename(GLib.path_get_dirname(ruta)) === CARPETA_30;
+
+// La versión de un fondo que se usa, según la preferencia (preferred-version).
+function versionElegida(ajustes, fondo) {
+    if (ajustes.get_string('preferred-version') === '30fps')
+        return fondo.v30 ?? fondo.original;
+    return fondo.original ?? fondo.v30;
 }
 
 const nombreVideo = ruta => GLib.path_get_basename(ruta).replace(/\.[^.]+$/, '');
@@ -80,6 +119,26 @@ vec2 d = max(max(minimo - p, p - maximo), vec2(0.0));
 float alfa = radio > 0.0 ? clamp(radio - length(d) + 0.5, 0.0, 1.0) : 1.0;
 cogl_color_out *= alfa;
 `;
+
+// Disposición de un fondo con el clon dentro: no pide tamaño y estira al clon sobre todo el
+// fondo. Sin ella el fondo pediría el tamaño del clon (el monitor entero); los de Actividades no
+// piden ninguno, y con eso cada escritorio se hacía tan grande que no quedaba hueco para ver
+// asomar el de al lado.
+const DisposicionFondo = GObject.registerClass({GTypeName: 'FondosAnimadosDisposicionFondo'},
+class DisposicionFondo extends Clutter.LayoutManager {
+    vfunc_get_preferred_width(_contenedor, _alto) {
+        return [0, 0];
+    }
+
+    vfunc_get_preferred_height(_contenedor, _ancho) {
+        return [0, 0];
+    }
+
+    vfunc_allocate(contenedor, caja) {
+        for (const hijo of contenedor)
+            hijo.allocate(caja);
+    }
+});
 
 const EfectoEsquinas = GObject.registerClass({GTypeName: 'FondosAnimadosEfectoEsquinas'},
 class EfectoEsquinas extends Shell.GLSLEffect {
@@ -128,8 +187,19 @@ class BotonFondos extends QuickMenuToggle {
         this.menu.addMenuItem(this._pausa);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Biblioteca'));
+        // La sección se añade al menú (para que las señales y el teclado funcionen) y luego su
+        // actor se mete en un ScrollView, porque con muchos vídeos no cabe en Ajustes rápidos.
         this._lista = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._lista);
+        this._scroll = new St.ScrollView({
+            style: 'max-height: 18em;',
+            hscrollbarPolicy: St.PolicyType.NEVER,
+            vscrollbarPolicy: St.PolicyType.AUTOMATIC,
+        });
+        const caja = this._lista.actor.get_parent();
+        caja.remove_child(this._lista.actor);
+        this._scroll.set_child(this._lista.actor);
+        caja.add_child(this._scroll);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addAction('Abrir Fondos animados', () => {
@@ -152,24 +222,27 @@ class BotonFondos extends QuickMenuToggle {
     _rellenarLista() {
         this._lista.removeAll();
         const actual = this._ajustes.get_string('video');
-        const videos = listarVideos(this._ajustes);
-        if (videos.length === 0) {
+        const fondos = listarFondos(this._ajustes);
+        if (fondos.length === 0) {
             const vacio = new PopupMenu.PopupMenuItem('No hay vídeos todavía', {reactive: false});
             this._lista.addMenuItem(vacio);
             return;
         }
-        for (const ruta of videos.slice(0, MAX_VIDEOS_MENU)) {
-            const item = new PopupMenu.PopupMenuItem(nombreVideo(ruta));
-            item.setOrnament(ruta === actual ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+        // Una entrada por fondo; al elegirla se usa la versión preferida.
+        for (const fondo of fondos.slice(0, MAX_VIDEOS_MENU)) {
+            const item = new PopupMenu.PopupMenuItem(fondo.nombre);
+            const esActual = actual === fondo.original || actual === fondo.v30;
+            item.setOrnament(esActual ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+            item.connect('key-focus-in', () => ensureActorVisibleInScrollView(this._scroll, item));
             item.connect('activate', () => {
-                this._ajustes.set_string('video', ruta);
+                this._ajustes.set_string('video', versionElegida(this._ajustes, fondo));
                 this._ajustes.set_boolean('enabled', true);
             });
             this._lista.addMenuItem(item);
         }
-        if (videos.length > MAX_VIDEOS_MENU) {
+        if (fondos.length > MAX_VIDEOS_MENU) {
             const mas = new PopupMenu.PopupMenuItem(
-                `y ${videos.length - MAX_VIDEOS_MENU} más en la app…`, {reactive: false});
+                `y ${fondos.length - MAX_VIDEOS_MENU} más en la app…`, {reactive: false});
             this._lista.addMenuItem(mas);
         }
     }
@@ -186,7 +259,8 @@ class BotonFondos extends QuickMenuToggle {
         else if (!video)
             this.subtitle = 'Sin vídeo';
         else
-            this.subtitle = (this._ext.pausaManual ? '⏸ ' : '') + nombreVideo(video);
+            this.subtitle = (this._ext.pausaManual ? '⏸ ' : '') + nombreVideo(video) +
+                (esVersion30(video) ? ' · 30 fps' : '');
         if (this.menu.isOpen)
             this._rellenarLista();
         this._actualizando = false;
@@ -248,6 +322,7 @@ export default class FondosAnimados extends Extension {
             'changed::renderer-path', () => this._reiniciar(),
             'changed::debug', () => this._reiniciar(),
             'changed::video', () => this._cambiarVideo(),
+            'changed::preferred-version', () => this._cambiarVersion(),
             'changed::fit', () => this._enviar(`fit ${this._ajustes.get_string('fit')}`),
             'changed::pause-fullscreen', () => this._colaPausa(),
             'changed::pause-maximized', () => this._colaPausa(),
@@ -316,9 +391,6 @@ export default class FondosAnimados extends Extension {
 
     _decorarFondo(fondo, monitor) {
         const clon = new Clutter.Clone({name: NOMBRE_CLON, reactive: false});
-        clon.add_constraint(new Clutter.BindConstraint({
-            source: fondo, coordinate: Clutter.BindCoordinate.SIZE,
-        }));
         clon._monitor = monitor;
 
         // Fondos de Actividades (no son hijos del grupo de fondos del escritorio): esquinas
@@ -345,6 +417,7 @@ export default class FondosAnimados extends Extension {
             actualizar();
         }
 
+        fondo.layout_manager = new DisposicionFondo();
         fondo.add_child(clon);
         this._clones.add(clon);
         clon.connect('destroy', () => this._clones?.delete(clon));
@@ -359,6 +432,9 @@ export default class FondosAnimados extends Extension {
     }
 
     _enlazarTodos() {
+        // Puede llegar después de disable() (la ventana del reproductor se cierra más tarde).
+        if (!this._clones)
+            return;
         for (const clon of this._clones)
             this._enlazarClon(clon);
     }
@@ -456,8 +532,7 @@ export default class FondosAnimados extends Extension {
         this._cliente = null;
         this._entrada = null;
         this._ventanas.clear();
-        if (this._clones)
-            this._enlazarTodos();
+        this._enlazarTodos();
     }
 
     _parar() {
@@ -485,6 +560,15 @@ export default class FondosAnimados extends Extension {
             this._enviar(`video ${video}`);
         else
             this._reiniciar();
+    }
+
+    // Al cambiar la versión preferida, el fondo actual pasa a esa versión si la tiene.
+    _cambiarVersion() {
+        const actual = this._ajustes.get_string('video');
+        const fondo = listarFondos(this._ajustes).find(f => f.original === actual || f.v30 === actual);
+        const elegida = fondo ? versionElegida(this._ajustes, fondo) : null;
+        if (elegida && elegida !== actual)
+            this._ajustes.set_string('video', elegida);
     }
 
     // Solo con la clave «debug»: journalctl --user -b | grep 'Fondos animados'

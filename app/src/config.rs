@@ -57,6 +57,21 @@ pub fn carpeta_datos() -> PathBuf {
     glib::user_data_dir().join("fondos-animados")
 }
 
+/// Subcarpeta de la biblioteca con las versiones de 30 fps: mismo nombre que el original, en .mp4.
+pub const CARPETA_30: &str = "30 fps";
+
+/// Dónde está (o irá) la versión de 30 fps de un vídeo de la biblioteca.
+pub fn ruta_version_30(original: &Path) -> PathBuf {
+    let base = original.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    original.parent().unwrap_or(Path::new(".")).join(CARPETA_30).join(format!("{base}.mp4"))
+}
+
+/// Ficheros a medias de una descarga o una conversión.
+pub fn es_temporal(ruta: &Path) -> bool {
+    let nombre = ruta.to_string_lossy();
+    [".tmp.", ".convirtiendo.", ".optimizando."].iter().any(|t| nombre.contains(t))
+}
+
 pub fn es_video(ruta: &Path) -> bool {
     ruta.extension()
         .and_then(|e| e.to_str())

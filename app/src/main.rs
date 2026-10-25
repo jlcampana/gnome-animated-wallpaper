@@ -1,6 +1,7 @@
 //! Fondos animados: biblioteca de vídeos para la extensión de fondo animado de GNOME, con
 //! búsqueda y descarga desde varias webs, conversión y navegador integrado.
 
+mod bd;
 mod biblioteca;
 mod config;
 mod contexto;
@@ -21,6 +22,8 @@ use gtk::{gio, glib};
 const CSS: &str = "
 .marca-actual { background: @accent_bg_color; color: @accent_fg_color; border-radius: 999px; padding: 4px; }
 .etiqueta-resolucion { background: rgba(0, 0, 0, 0.65); color: white; border-radius: 6px; padding: 1px 6px; }
+/* Texto de la etiqueta de fps de la biblioteca (la forma roja se dibuja debajo). */
+.etiqueta-fps { color: white; font-weight: bold; padding: 2px 8px 2px 15px; }
 flowboxchild { border-radius: 14px; padding: 6px; }
 flowboxchild.fondo-actual .miniatura { outline: 3px solid @accent_color; outline-offset: -3px; }
 ";
@@ -183,6 +186,10 @@ fn construir(app: &adw::Application) {
         accion("sin-audio-todos", Box::new(move || biblioteca.quitar_audio_todos()));
     }
     {
+        let biblioteca = biblioteca.clone();
+        accion("versiones-30-todas", Box::new(move || biblioteca.crear_versiones_30_todas()));
+    }
+    {
         let v = ventana.clone();
         accion(
             "acerca",
@@ -237,6 +244,7 @@ fn menu_principal() -> gtk::MenuButton {
     menu.append_submenu(Some("Estilo"), &estilo);
     let herramientas = gio::Menu::new();
     herramientas.append(Some("Quitar el audio de toda la biblioteca"), Some("win.sin-audio-todos"));
+    herramientas.append(Some("Crear versiones de 30 fps de toda la biblioteca"), Some("win.versiones-30-todas"));
     menu.append_section(None, &herramientas);
     let final_ = gio::Menu::new();
     final_.append(Some("Acerca de Fondos animados"), Some("win.acerca"));

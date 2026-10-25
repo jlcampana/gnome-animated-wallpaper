@@ -48,6 +48,8 @@ Dónde queda cada cosa:
 | `~/.local/share/gnome-shell/extensions/animated-wallpaper@jlcampana.github.io/` | la extensión |
 | `~/Vídeos/Fondos animados/` | la biblioteca (se puede cambiar en dconf: `library-dir`) |
 | `~/.cache/fondos-animados/` | miniaturas, vistas previas, descargas a medias y capacidades del hardware |
+| `~/Vídeos/Fondos animados/30 fps/` | versiones de 30 fps (mismo nombre que el original) |
+| `~/.local/share/fondos-animados/biblioteca.db` | SQLite con fps, resolución, códec… de cada vídeo (se rehace sola si se borra) |
 | `~/.local/share/fondos-animados/web/` | cookies y datos del navegador integrado |
 
 ### Decodificación por GPU
@@ -68,6 +70,8 @@ Para comprobarlo: `fondo-animado-convertir --capacidades --forzar` (o la página
 - **App**: «Fondos animados» en el menú de aplicaciones.
   - *Biblioteca*: clic en un vídeo para ponerlo de fondo; su menú (⋮) permite convertirlo,
     quitarle el audio, abrir su carpeta o borrarlo. Se pueden soltar vídeos o .zip en la ventana.
+    El desplegable junto al buscador filtra por fps (más de 30, a 30 o menos, con las dos
+    versiones, sin versión de 30). Ver [Versiones de 30 fps](#versiones-de-30-fps).
   - *Explorar*: elige la web, busca (en inglés) o elige categoría y resolución, y pasa de página
     con las flechas (cada página sustituye a la anterior para no acumular memoria). Clic en un
     resultado: vista previa y descarga.
@@ -79,8 +83,10 @@ Para comprobarlo: `fondo-animado-convertir --capacidades --forzar` (o la página
 
   ```bash
   fondo-animado                  # estado
-  fondo-animado lista
-  fondo-animado poner frieren    # por nombre (parcial) o ruta
+  fondo-animado lista            # un fondo por línea: [original + 30 fps], * el actual
+  fondo-animado poner frieren    # por nombre (parcial) o ruta, en la versión preferida
+  fondo-animado poner frieren 30fps   # o en una concreta: original | 30fps
+  fondo-animado version 30fps    # versión preferida (el fondo actual pasa a ella)
   fondo-animado siguiente | aleatorio
   fondo-animado on | off
   fondo-animado ajuste cover     # cover | contain | fill
@@ -97,6 +103,19 @@ Para comprobarlo: `fondo-animado-convertir --capacidades --forzar` (o la página
    convierte al formato recomendado.
 4. Opcional (*Ajustes → Adaptar a la pantalla*): recodificar a la resolución de tu pantalla y al
    formato recomendado. Por defecto solo si la GPU puede codificar (con CPU tarda).
+5. Opcional (*Ajustes → Crear también la versión de 30 fps*): si el vídeo va a más de 30 fps,
+   se crea además su versión de 30.
+
+### Versiones de 30 fps
+
+Un vídeo de 60 fps puede tener además una versión de 30, que hace trabajar menos a la GPU. Va en
+la subcarpeta `30 fps` de la biblioteca con el mismo nombre que el original (en .mp4), y el
+original se conserva. La app y el menú de Ajustes rápidos enseñan una sola entrada por fondo
+(con la etiqueta «60 · 30 fps») y usan la versión elegida en *Ajustes → Versión que se usa de
+fondo* (clave `preferred-version`: `original` o `30fps`); al cambiarla, el fondo actual pasa a
+esa versión. El menú ⋮ de cada fondo permite usar una u otra, y crear o borrar la de 30 fps; el
+menú principal tiene «Crear versiones de 30 fps de toda la biblioteca» (pide confirmación,
+enseña el avance y se puede cancelar entre vídeo y vídeo).
 
 ### Hardware y formato recomendado
 

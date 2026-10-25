@@ -75,6 +75,20 @@ pub fn construir(ctx: &Rc<Contexto>) -> adw::PreferencesPage {
         });
     }
     grupo.add(&ajuste);
+    let versiones = ["original", "30fps"];
+    let version = adw::ComboRow::builder()
+        .title("Versión que se usa de fondo")
+        .subtitle("Cuando un vídeo tiene las dos: la de 30 fps hace trabajar menos a la GPU")
+        .model(&gtk::StringList::new(&["La original", "La de 30 fps"]))
+        .build();
+    version.set_selected(versiones.iter().position(|v| *v == ajustes.string("preferred-version")).unwrap_or(0) as u32);
+    {
+        let ajustes = ajustes.clone();
+        version.connect_selected_notify(move |c| {
+            let _ = ajustes.set_string("preferred-version", versiones[c.selected() as usize]);
+        });
+    }
+    grupo.add(&version);
     pagina.add(&grupo);
 
     // ── Descargas ──
@@ -115,6 +129,12 @@ pub fn construir(ctx: &Rc<Contexto>) -> adw::PreferencesPage {
         });
     }
     grupo_desc.add(&optimizar);
+    let version_30 = adw::SwitchRow::builder()
+        .title("Crear también la versión de 30 fps")
+        .subtitle("De los vídeos que van más rápido, en la subcarpeta «30 fps»; el original se queda")
+        .build();
+    ajustes.bind("create-30fps", &version_30, "active").build();
+    grupo_desc.add(&version_30);
     let carpeta = adw::ActionRow::builder()
         .title("Carpeta de la biblioteca")
         .subtitle(ctx.biblioteca().to_string_lossy())
