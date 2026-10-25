@@ -257,7 +257,10 @@ conseguir_binarios() {
     if [[ -n ${BASH_SOURCE[0]:-} && -f ${BASH_SOURCE[0]} ]]; then
         aqui="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     fi
-    if [[ -n $aqui && -d $aqui/bin && -d $aqui/extension ]] && ((!COMPILAR)) && binarios_funcionan "$aqui/bin"; then
+    # Solo una release descomprimida trae bin/ listo; en un clon, bin/ puede ser un resto viejo
+    # (está en .gitignore) y hay que compilar.
+    if [[ -n $aqui && -d $aqui/bin && -d $aqui/extension && ! -f $aqui/Cargo.toml ]] && ((!COMPILAR)) &&
+        binarios_funcionan "$aqui/bin"; then
         titulo "Usando los binarios de esta carpeta"
         ORIGEN="$aqui"
     elif [[ -n $aqui && -f $aqui/Cargo.toml ]]; then
@@ -319,8 +322,9 @@ instalar_servicio() {
     mkdir -p "$SYSTEMD_DIR"
     sed "s|@BIN_DIR@|$BIN_DIR|g" "$ORIGEN/data/$SERVICIO" >"$SYSTEMD_DIR/$SERVICIO"
     if systemctl --user daemon-reload 2>/dev/null && systemctl --user enable "$SERVICIO" 2>/dev/null; then
-        # Si estaba en marcha, con el programa nuevo (lo que bajaba sigue donde se quedó).
-        systemctl --user try-restart "$SERVICIO" 2>/dev/null || true
+        # Lo arranca ya, o lo reinicia con el programa nuevo si estaba en marcha (lo que bajaba
+        # sigue donde se quedó).
+        systemctl --user restart "$SERVICIO" 2>/dev/null || true
         info "Servicio de usuario $SERVICIO activado"
     else
         aviso "no se pudo activar $SERVICIO (¿sin systemd de usuario?): la app lanzará el gestor ella misma"
