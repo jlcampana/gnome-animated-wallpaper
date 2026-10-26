@@ -31,9 +31,11 @@ jobs:
     steps:
       - name: Dependencias (Fedora)
         if: startsWith(matrix.image, 'fedora')
+        # ffmpeg de RPM Fusion: el ffmpeg-free de Fedora no trae libx264, que usan las pruebas
         run: |
+          dnf install -y "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-44.noarch.rpm"
           dnf install -y git tar gzip cargo gtk4-devel libadwaita-devel gstreamer1-devel \
-            gstreamer1-plugins-base-devel webkitgtk6.0-devel libsoup3-devel
+            gstreamer1-plugins-base-devel webkitgtk6.0-devel libsoup3-devel ffmpeg p7zip p7zip-plugins
       - name: Dependencias (Ubuntu)
         if: startsWith(matrix.image, 'ubuntu')
         env:
@@ -42,7 +44,7 @@ jobs:
           apt-get update -qq
           apt-get install -y -qq git curl ca-certificates build-essential pkg-config libgtk-4-dev \
             libadwaita-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwebkitgtk-6.0-dev \
-            libsoup-3.0-dev
+            libsoup-3.0-dev ffmpeg p7zip-full
           curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@v4
@@ -53,6 +55,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ matrix.image }}-cargo-${{ hashFiles('Cargo.lock') }}
+      # las pruebas crean vídeos de prueba con ffmpeg y paquetes con 7z
       - run: cargo test --locked
 
       - name: Comprobar que la versión coincide con la etiqueta
