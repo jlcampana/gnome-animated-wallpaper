@@ -31,6 +31,9 @@ const NOMBRE_CLON = 'fondos-animados-clon';
 const EJECUTABLE = 'fondos-animados-renderer';
 const REINTENTOS_MAX = 5;       // arranques fallidos seguidos antes de rendirse
 const REINTENTO_MS = 2000;
+// Sin ventana pasado este tiempo, el reproductor se da por colgado (p. ej. gst-plugin-scanner
+// atascado al rehacer la caché de plugins tras una actualización) y se relanza.
+const VIGILANCIA_MS = 20000;
 const ICONO = 'video-x-generic-symbolic';
 const ID_APP = 'io.github.jlcampana.FondosAnimados';
 const EXTENSIONES_VIDEO = ['.mp4', '.webm', '.mkv', '.mov', '.m4v'];
@@ -307,6 +310,7 @@ export default class FondosAnimados extends Extension {
         this._pausado = false;
         this._idPausa = 0;
         this._idReintento = 0;
+        this._idVigilancia = 0;
         this.pausaManual = false;
         this._pantallaApagada = false;
         this._cancelable = new Gio.Cancellable();
@@ -540,13 +544,23 @@ export default class FondosAnimados extends Extension {
         this._leerSalida(Gio.DataInputStream.new(this._proceso.get_stdout_pipe()));
         const proceso = this._proceso;
         const inicio = GLib.get_monotonic_time();
+        let colgado = false;
+        this._idVigilancia = GLib.timeout_add(GLib.PRIORITY_DEFAULT, VIGILANCIA_MS, () => {
+            this._idVigilancia = 0;
+            if (this._proceso === proceso && this._ventanas.size === 0) {
+                console.warn('Fondos animados: el reproductor no abre su ventana; lo relanzo');
+                colgado = true;
+                proceso.force_exit();
+            }
+            return GLib.SOURCE_REMOVE;
+        });
         proceso.wait_async(null, () => {
             if (this._proceso !== proceso)
                 return;
             this._limpiarProceso();
-            // Si muere al poco de arrancar, se reintenta unas pocas veces.
+            // Si muere (o se cuelga) al poco de arrancar, se reintenta unas pocas veces.
             const vivioMs = (GLib.get_monotonic_time() - inicio) / 1000;
-            this._fallos = vivioMs < 10000 ? this._fallos + 1 : 0;
+            this._fallos = vivioMs < 10000 || colgado ? this._fallos + 1 : 0;
             if (this._fallos >= REINTENTOS_MAX) {
                 console.error('Fondos animados: el reproductor falla al arrancar; me rindo');
                 return;
@@ -576,6 +590,9 @@ export default class FondosAnimados extends Extension {
     }
 
     _limpiarProceso() {
+        if (this._idVigilancia)
+            GLib.source_remove(this._idVigilancia);
+        this._idVigilancia = 0;
         this._proceso = null;
         this._cliente = null;
         this._entrada = null;
