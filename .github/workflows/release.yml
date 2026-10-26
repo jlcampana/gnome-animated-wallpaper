@@ -1,0 +1,116 @@
+# Compila y pasa las pruebas en Fedora y Ubuntu en cada push a main. Con una etiqueta v*, además
+# empaqueta los .tar.gz (con herramientas/empaquetar.sh) y publica la release.
+#
+# La descripción de la release sale del mensaje de la etiqueta anotada: el primer párrafo es el
+# resumen y lo demás va en «Novedades» (ver herramientas/publicar.sh).
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: fedora:44
+            name: Fedora 44
+          - image: ubuntu:26.04
+            name: Ubuntu 26.04
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - name: Dependencias (Fedora)
+        if: startsWith(matrix.image, 'fedora')
+        run: |
+          dnf install -y git tar gzip cargo gtk4-devel libadwaita-devel gstreamer1-devel \
+            gstreamer1-plugins-base-devel webkitgtk6.0-devel libsoup3-devel
+      - name: Dependencias (Ubuntu)
+        if: startsWith(matrix.image, 'ubuntu')
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq git curl ca-certificates build-essential pkg-config libgtk-4-dev \
+            libadwaita-1-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwebkitgtk-6.0-dev \
+            libsoup-3.0-dev
+          curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.image }}-cargo-${{ hashFiles('Cargo.lock') }}
+      - run: cargo test --locked
+
+      - name: Comprobar que la versión coincide con la etiqueta
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" = "$GITHUB_REF_NAME"
+      - name: Empaquetar
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          herramientas/empaquetar.sh --solo-local
+          # fila de la tabla «Compilado en» de la release
+          v() { pkg-config --modversion "$1" | cut -d. -f1,2; }
+          for f in dist/*.tar.gz; do
+            echo "| \`$(basename "$f")\` | ${{ matrix.name }} (GTK $(v gtk4), libadwaita $(v libadwaita-1), GStreamer $(v gstreamer-1.0)) |" > "${f%.tar.gz}.fila"
+          done
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: paquete-${{ strategy.job-index }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mensaje de la etiqueta
+        run: git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publicar la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # sin la línea de asunto («Versión X.Y.Z») ni las líneas Co-Authored-By
+          git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" | grep -v '^Co-Authored-By:' > mensaje.md
+          resumen="$(awk 'BEGIN{RS=""} NR==1' mensaje.md)"
+          novedades="$(awk 'BEGIN{RS=""; ORS="\n\n"} NR>1' mensaje.md)"
+          {
+            [ -n "$resumen" ] && printf '%s\n\n' "$resumen"
+            echo '## Instalar o actualizar'
+            echo
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash"
+            echo '```'
+            echo
+            echo 'Después hay que cerrar sesión y volver a entrar.'
+            echo
+            echo '| Paquete | Compilado en |'
+            echo '|---|---|'
+            cat dist/*.fila | sort
+            if [ -n "$novedades" ]; then
+              printf '\n## Novedades\n\n%s\n' "$novedades"
+            fi
+          } > notas.md
+          cat notas.md
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --title "Fondos animados $version" --notes-file notas.md

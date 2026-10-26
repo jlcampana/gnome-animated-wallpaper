@@ -237,13 +237,20 @@ cargo test -- --include-ignored  # además, descarga real de una web
 herramientas/empaquetar.sh       # .tar.gz de la release (Fedora local + Ubuntu en podman)
 ```
 
+Para publicar una versión: sube `version` en `Cargo.toml`, haz commit y ejecuta
+`herramientas/publicar.sh NOTAS.md`. Crea la etiqueta anotada `vX.Y.Z` con el texto de `NOTAS.md`
+(el primer párrafo es el resumen; el resto sale bajo «Novedades») y la sube. GitHub Actions compila
+en contenedores de Fedora 44 y Ubuntu 26.04, empaqueta con `herramientas/empaquetar.sh` y publica la
+release con la tabla de versiones de GTK, libadwaita y GStreamer de cada paquete. En cada push a
+`main` el mismo workflow compila y pasa las pruebas en las dos distribuciones.
+
 ```
 app/          la app (Rust): biblioteca, explorar, navegador, ajustes, fuentes web, importación
 renderer/     el reproductor (Rust + GStreamer)
 extension/    la extensión de GNOME Shell (JavaScript) y el esquema de ajustes
 scripts/      fondo-animado, -convertir, -sin-audio, -miniatura
 data/         lanzador .desktop e icono
-herramientas/ empaquetado de releases
+herramientas/ empaquetado y publicación de releases
 ```
 
 ## Media Controller
