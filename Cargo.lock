@@ -267,7 +267,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fondos-animados"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "async-channel",
  "gstreamer",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "fondos-animados-renderer"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "async-channel",
  "gstreamer",
