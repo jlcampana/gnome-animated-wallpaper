@@ -7,8 +7,8 @@
 //    y su contenido se pinta con un Clutter.Clone dentro de cada Meta.BackgroundActor: el del
 //    escritorio y los de las miniaturas de Actividades. Para eso se intercepta
 //    BackgroundManager._createBackgroundActor, que crea todos los fondos de GNOME Shell.
-//  - El reproductor se pausa con la sesión bloqueada o si todas las pantallas están tapadas por
-//    ventanas a pantalla completa (o maximizadas, si se activa).
+//  - El reproductor se pausa con la pantalla apagada, con la sesión bloqueada o si todas las
+//    pantallas están tapadas por ventanas a pantalla completa (o maximizadas, si se activa).
 //  - Órdenes al reproductor por su stdin: «video <ruta>», «fit <modo>», «pause», «play».
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
@@ -308,6 +308,8 @@ export default class FondosAnimados extends Extension {
         this._idPausa = 0;
         this._idReintento = 0;
         this.pausaManual = false;
+        this._pantallaApagada = false;
+        this._cancelable = new Gio.Cancellable();
         this._upower = null;
 
         // Con battery-30fps, al desenchufar se pasa a la versión de 30 fps y al enchufar se
@@ -363,6 +365,10 @@ export default class FondosAnimados extends Extension {
         // Al abrir Actividades se pausa en el acto (no en la cola de baja prioridad, que esperaría
         // a que acabe la animación): así el vídeo no compite con ella. Al cerrarla, sigue.
         Main.overview.connectObject('showing', () => this._actualizarPausa(), 'hidden', cola, this);
+        // Pantalla apagada por inactividad (aunque no se bloquee la sesión): Mutter avisa del
+        // cambio, pero el estado solo se puede leer por D-Bus.
+        global.backend.get_monitor_manager().connectObject('power-save-mode-changed',
+            () => this._leerPantalla(), this);
         Main.sessionMode.connectObject('updated', () => {
             if (this._indicador)
                 this._indicador.boton.visible = !Main.sessionMode.isLocked;
@@ -394,6 +400,9 @@ export default class FondosAnimados extends Extension {
         Main.layoutManager.disconnectObject(this);
         Main.overview.disconnectObject(this);
         Main.sessionMode.disconnectObject(this);
+        global.backend.get_monitor_manager().disconnectObject(this);
+        this._cancelable.cancel();
+        this._cancelable = null;
         this._ajustes.disconnectObject(this);
         this._upower?.disconnectObject(this);
         this._upower = null;
@@ -716,6 +725,25 @@ export default class FondosAnimados extends Extension {
         });
     }
 
+    // PowerSaveMode de Mutter: 0 encendida; 1, 2 y 3 en reposo o apagada; -1 desconocido.
+    _leerPantalla() {
+        Gio.DBus.session.call('org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig',
+            'org.freedesktop.DBus.Properties', 'Get',
+            new GLib.Variant('(ss)', ['org.gnome.Mutter.DisplayConfig', 'PowerSaveMode']),
+            null, Gio.DBusCallFlags.NONE, -1, this._cancelable, (bus, resultado) => {
+                let modo;
+                try {
+                    modo = bus.call_finish(resultado).recursiveUnpack()[0];
+                } catch (e) {
+                    if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                        this._depurar(`sin PowerSaveMode: ${e.message}`);
+                    return;
+                }
+                this._pantallaApagada = modo > 0;
+                this._actualizarPausa();
+            });
+    }
+
     pausarManual(pausa) {
         this.pausaManual = pausa;
         this._indicador?.boton._actualizar();
@@ -723,7 +751,7 @@ export default class FondosAnimados extends Extension {
     }
 
     _debePausar() {
-        if (this.pausaManual)
+        if (this.pausaManual || this._pantallaApagada)
             return true;
         if (Main.sessionMode.isLocked)
             return this._ajustes.get_boolean('pause-locked');
@@ -751,7 +779,7 @@ export default class FondosAnimados extends Extension {
         const pausar = this._debePausar();
         if (pausar === this._pausado || !this._proceso)
             return;
-        this._depurar(pausar ? 'pausa (pantallas tapadas, Actividades, bloqueo o pausa manual)' : 'reanudo');
+        this._depurar(pausar ? 'pausa (pantallas tapadas o apagadas, Actividades, bloqueo o pausa manual)' : 'reanudo');
         this._pausado = pausar;
         this._enviar(pausar ? 'pause' : 'play');
     }

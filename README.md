@@ -6,7 +6,8 @@ y un botón en Ajustes rápidos.
 
 - **Extensión de GNOME Shell** (GNOME 48–51): pone el vídeo en el fondo del escritorio y en
   Actividades (allí se queda en pausa para que la animación vaya fluida), lo pausa con ventanas
-  a pantalla completa (o maximizadas, si quieres) y con la sesión bloqueada, y añade un menú en Ajustes rápidos para cambiar de fondo o pausarlo.
+  a pantalla completa (o maximizadas, si quieres), con la sesión bloqueada y con la pantalla
+  apagada, y añade un menú en Ajustes rápidos para cambiar de fondo o pausarlo.
 - **Reproductor** (`fondos-animados-renderer`, Rust + GStreamer): decodifica con VA-API
   (AMD/Intel) o NVDEC (NVIDIA) y entrega los fotogramas como DMABuf, sin pasar por la CPU. Un
   solo decodificador para todos los monitores.
