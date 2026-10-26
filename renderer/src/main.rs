@@ -305,6 +305,11 @@ fn escuchar_stdin(rep: Rc<Reproductor>, app: gtk::Application) {
 fn main() -> glib::ExitCode {
     glib::set_prgname(Some("fondos-animados-renderer"));
     glib::set_application_name("Fondos animados (renderizador)");
+    // GTK antes que GStreamer: al conectarse, libwayland quita WAYLAND_SOCKET del entorno y
+    // cierra el socket en exec. Si no, el gst-plugin-scanner que lanza gst::init al rehacer la
+    // caché hereda nuestra conexión con mutter, algún plugin la usa y nos quedamos sin ventana
+    // (y el scanner colgado para siempre).
+    gtk::init().expect("gtk::init");
     gst::init().expect("gst::init");
 
     let op = Rc::new(leer_opciones());
