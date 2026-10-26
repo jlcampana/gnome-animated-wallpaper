@@ -61,7 +61,7 @@ pub fn construir(ctx: &Rc<Contexto>) -> adw::PreferencesPage {
     interruptor("enabled", "Fondo animado activo", "");
     interruptor("pause-fullscreen", "Pausar con pantalla completa", "Cuando todas las pantallas tienen una ventana a pantalla completa");
     interruptor("pause-maximized", "Pausar con ventanas maximizadas", "");
-    interruptor("pause-locked", "Pausar con la sesión bloqueada", "");
+    interruptor("pause-locked", "Pausar con la sesión bloqueada", "Con la pantalla apagada se pausa siempre");
     let modos = ["cover", "contain", "fill"];
     let ajuste = adw::ComboRow::builder()
         .title("Ajuste a la pantalla")
@@ -263,7 +263,26 @@ pub fn construir(ctx: &Rc<Contexto>) -> adw::PreferencesPage {
     let grupo_ver = adw::PreferencesGroup::new();
     let version = adw::ActionRow::builder().title("Versión").subtitle(env!("CARGO_PKG_VERSION")).build();
     version.add_css_class("property");
+    let buscar = gtk::Button::builder()
+        .label("Buscar actualizaciones")
+        .valign(gtk::Align::Center)
+        .build();
+    {
+        let ctx = ctx.clone();
+        buscar.connect_clicked(move |_| {
+            if let Some(f) = ctx.buscar_actualizacion.borrow().as_ref() {
+                f(true);
+            }
+        });
+    }
+    version.add_suffix(&buscar);
     grupo_ver.add(&version);
+    let auto = adw::SwitchRow::builder()
+        .title("Buscar versiones nuevas al abrir la app")
+        .subtitle("Si hay una, sale un aviso arriba para actualizar")
+        .build();
+    ajustes.bind("check-updates", &auto, "active").build();
+    grupo_ver.add(&auto);
     pagina.add(&grupo_ver);
 
     pagina

@@ -57,6 +57,15 @@ Dónde queda cada cosa:
 | `~/.config/systemd/user/fondos-animados-descargas.service` | servicio de usuario del gestor de descargas |
 | `~/.local/share/fondos-animados/web/` | cookies y datos del navegador integrado |
 
+### Actualizar
+
+Al abrirse, la app mira cuál es la última release en GitHub y, si es más nueva, avisa con una
+barra arriba. Al pulsar **Actualizar**, la app se cierra, ejecuta el `install.sh` de esa versión
+(sin tocar los paquetes del sistema) y se vuelve a abrir sola. La extensión nueva se carga al
+volver a entrar en la sesión. Si algo falla, la app lo dice al reabrirse y el detalle queda en
+`~/.cache/fondos-animados/actualizacion.log`. En *Ajustes* se puede buscar a mano o desactivar
+la comprobación. También se puede actualizar volviendo a ejecutar la línea de `curl` de arriba.
+
 ### Decodificación por GPU
 
 El reproductor usa los decodificadores VA-API de GStreamer (`vah264dec`, `vah265dec`,
@@ -83,7 +92,8 @@ Para comprobarlo: `fondo-animado-convertir --capacidades --forzar` (o la página
   - *Navegador*: WebKit con sesión propia; cualquier descarga se importa sola a la biblioteca.
   - *Descargas y conversiones* (botón de la barra de título): ver [Cola de descargas y
     conversiones](#cola-de-descargas-y-conversiones).
-  - *Ajustes*: estado de la extensión, pausas, descargas, hardware detectado y estilo.
+  - *Ajustes*: estado de la extensión, pausas, descargas, hardware detectado, estilo y
+    versiones nuevas.
 - **Ajustes rápidos**: botón «Fondo animado» (activar/desactivar) con menú: pausar, elegir vídeo
   de la biblioteca, abrir la app.
 - **Terminal**:

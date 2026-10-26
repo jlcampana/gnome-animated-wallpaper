@@ -38,6 +38,10 @@
       <default>true</default>
       <summary>Pausar con la sesión bloqueada</summary>
     </key>
+    <key name="check-updates" type="b">
+      <default>true</default>
+      <summary>Buscar versiones nuevas en GitHub al abrir la app</summary>
+    </key>
     <key name="strip-audio" type="b">
       <default>true</default>
       <summary>Quitar el audio de los vídeos al descargarlos o importarlos</summary>

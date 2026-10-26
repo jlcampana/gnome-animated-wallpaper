@@ -1,6 +1,7 @@
 //! Fondos animados: biblioteca de vídeos para la extensión de fondo animado de GNOME, con
 //! búsqueda y descarga desde varias webs, conversión y navegador integrado.
 
+mod actualizar;
 mod bd;
 mod biblioteca;
 mod cola;
@@ -131,6 +132,9 @@ fn construir(app: &adw::Application) {
 
     let vista = adw::ToolbarView::new();
     vista.add_top_bar(&cabecera);
+    let aviso_version = adw::Banner::new("");
+    vista.add_top_bar(&aviso_version);
+    actualizar::preparar(&ctx, &aviso_version);
     vista.set_content(Some(&pilas));
     avisos.set_child(Some(&vista));
 

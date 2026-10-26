@@ -17,6 +17,8 @@ pub struct Contexto {
     al_cambiar_biblioteca: RefCell<Vec<Box<dyn Fn()>>>,
     /// Ir a la página del navegador con una URL.
     pub abrir_navegador: RefCell<Option<Box<dyn Fn(&str)>>>,
+    /// Mirar si hay una versión nueva (true: comprobación pedida a mano, avisa también si no hay).
+    pub buscar_actualizacion: RefCell<Option<Box<dyn Fn(bool)>>>,
     /// Hardware de vídeo de este equipo (se detecta al arrancar, en segundo plano).
     pub capacidades: RefCell<Option<importar::Capacidades>>,
     al_detectar: RefCell<Vec<Box<dyn Fn(&importar::Capacidades)>>>,
@@ -30,6 +32,7 @@ impl Contexto {
             avisos,
             al_cambiar_biblioteca: RefCell::default(),
             abrir_navegador: RefCell::default(),
+            buscar_actualizacion: RefCell::default(),
             capacidades: RefCell::default(),
             al_detectar: RefCell::default(),
         })
