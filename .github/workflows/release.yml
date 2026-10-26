@@ -61,8 +61,9 @@ jobs:
       - name: Comprobar que la versión coincide con la etiqueta
         if: startsWith(github.ref, 'refs/tags/')
         run: test "v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" = "$GITHUB_REF_NAME"
+      # al lanzarlo a mano también se empaqueta (queda como artefacto, sin release)
       - name: Empaquetar
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           herramientas/empaquetar.sh --solo-local
@@ -72,7 +73,7 @@ jobs:
             echo "| \`$(basename "$f")\` | ${{ matrix.name }} (GTK $(v gtk4), libadwaita $(v libadwaita-1), GStreamer $(v gstreamer-1.0)) |" > "${f%.tar.gz}.fila"
           done
       - uses: actions/upload-artifact@v4
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
           name: paquete-${{ strategy.job-index }}
           path: dist/*
