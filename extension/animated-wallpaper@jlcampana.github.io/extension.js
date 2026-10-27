@@ -483,6 +483,13 @@ export default class FondosAnimados extends Extension {
         clon.visible = actor !== null;
     }
 
+    _repintarClones() {
+        for (const clon of this._clones ?? []) {
+            clon.queue_relayout();
+            clon.queue_redraw();
+        }
+    }
+
     _enlazarTodos() {
         // Puede llegar después de disable() (la ventana del reproductor se cierra más tarde).
         if (!this._clones)
@@ -692,6 +699,10 @@ export default class FondosAnimados extends Extension {
                 if (actor.visible)
                     actor.hide();
             }, this);
+            // Si la ventana cambia de tamaño, los clones se repintan enteros: si no, las zonas
+            // que se repintan se calculan con el tamaño de antes y los bordes derecho e
+            // inferior se quedaban sin pintar (parpadeando) hasta un repintado completo.
+            ventana.connectObject('size-changed', () => this._repintarClones(), this);
             return true;
         };
 

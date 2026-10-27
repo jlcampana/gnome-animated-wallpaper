@@ -234,16 +234,22 @@ fn construir(app: &gtk::Application, op: &Rc<Opciones>) -> Option<Rc<Reproductor
     let mut ventanas = vec![];
     let mut imagenes = vec![];
     for (i, &(ancho, alto)) in op.monitores.iter().enumerate() {
+        // Tamaño fijo, el del monitor. Una ventana no redimensionable toma el tamaño natural de
+        // su contenido: al cambiar de vídeo (un instante sin imagen) se encogía y volvía a
+        // crecer, y los clones de la extensión se quedaban con los bordes derecho e inferior
+        // sin repintar. Redimensionable con su tamaño por defecto, y con ese mínimo, no se mueve.
         let imagen = gtk::Picture::builder()
             .paintable(&paintable)
             .content_fit(op.ajuste)
             .can_shrink(true)
+            .width_request(ancho)
+            .height_request(alto)
             .build();
         let ventana = gtk::ApplicationWindow::builder()
             .application(app)
             .title(format!("{TITULO_VENTANA}-{i}"))
             .decorated(false)
-            .resizable(false)
+            .resizable(true)
             .default_width(ancho)
             .default_height(alto)
             .child(&imagen)
