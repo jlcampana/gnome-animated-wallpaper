@@ -88,8 +88,8 @@ DEPS_FEDORA=(gtk4 libadwaita webkitgtk6.0 gstreamer1 gstreamer1-plugins-base gst
 DEPS_FEDORA_COMPILAR=(cargo rust gcc pkgconf-pkg-config gtk4-devel libadwaita-devel gstreamer1-devel
                       gstreamer1-plugins-base-devel webkitgtk6.0-devel libsoup3-devel)
 DEPS_UBUNTU=(libgtk-4-1 libadwaita-1-0 libwebkitgtk-6.0-4 gstreamer1.0-tools gstreamer1.0-plugins-base
-             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-gtk4 ffmpeg p7zip-full unzip
-             mesa-va-drivers libglib2.0-bin)
+             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-gtk4 ffmpeg "7zip|p7zip-full" unzip
+             "mesa-libgallium|mesa-va-drivers" libglib2.0-bin)
 DEPS_UBUNTU_COMPILAR=(build-essential pkg-config curl libgtk-4-dev libadwaita-1-dev libgstreamer1.0-dev
                       libgstreamer-plugins-base1.0-dev libwebkitgtk-6.0-dev libsoup-3.0-dev)
 
@@ -104,15 +104,23 @@ instalar_paquetes() {  # paquetes…
             como_root dnf install -y "${faltan[@]}"
             ;;
         ubuntu)
-            local faltan=() hay=()
-            for p in "$@"; do dpkg -s "$p" >/dev/null 2>&1 || faltan+=("$p"); done
+            # «a|b»: vale cualquiera (los nombres cambian entre versiones: en 26.04 el driver
+            # VA-API va en mesa-libgallium y 7z en 7zip).
+            local faltan=() hay=() p alt
+            for p in "$@"; do
+                local esta=0
+                for alt in ${p//|/ }; do dpkg -s "$alt" >/dev/null 2>&1 && { esta=1; break; }; done
+                ((esta)) || faltan+=("$p")
+            done
             ((${#faltan[@]})) || { info "Dependencias ya instaladas"; return 0; }
             info "Faltan: ${faltan[*]}"
             preguntar "¿Instalarlas con apt?" || { aviso "sin dependencias, puede que no funcione"; return 0; }
             como_root apt-get update -qq
             # Solo las que existen en esta versión (los nombres cambian entre versiones).
             for p in "${faltan[@]}"; do
-                if apt-cache show "$p" >/dev/null 2>&1; then hay+=("$p"); else aviso "no existe el paquete $p aquí"; fi
+                local elegido=""
+                for alt in ${p//|/ }; do apt-cache show "$alt" >/dev/null 2>&1 && { elegido=$alt; break; }; done
+                if [[ -n $elegido ]]; then hay+=("$elegido"); else aviso "no existe el paquete $p aquí"; fi
             done
             ((${#hay[@]})) && como_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${hay[@]}"
             ;;
