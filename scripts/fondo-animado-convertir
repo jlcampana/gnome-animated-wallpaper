@@ -42,14 +42,54 @@ declare -A ENC_CPU=([h264]=libx264 [hevc]=libx265 [vp9]=libvpx-vp9 [av1]=libsvta
 dispositivo=/dev/dri/renderD128
 for d in /dev/dri/renderD*; do [[ -e $d ]] && { dispositivo=$d; break; }; done
 
-# ¿Funciona de verdad este codificador? (ffmpeg lista los VA-API aunque la GPU no los tenga)
-prueba_codificador() {
-    local enc=$1 hw=() vf=format=yuv420p
+# Opciones de ffmpeg para el codificador $1 con la calidad $2: rellena entrada_hw, final (lo que
+# va al final del filtro) y opciones, que declara quien llama.
+opciones_de() {
+    local enc=$1 calidad=$2
+    # AV1 y VP9 por GPU cuantizan en 0-255: la misma equivalencia que con SVT-AV1 (CRF = calidad
+    # + 8) y unas 4 unidades de índice por punto de CRF. 24 → 128, 28 → 144, 32 → 160.
+    local q255=$(((calidad + 8) * 4))
+    ((q255 > 255)) && q255=255
     case "$enc" in
-        *_vaapi) hw=(-vaapi_device "$dispositivo"); vf="format=nv12,hwupload" ;;
+        av1_vaapi|vp9_vaapi)
+            # No tienen -qp (ffmpeg lo ignoraría y usaría su calidad por defecto, altísima).
+            entrada_hw=(-vaapi_device "$dispositivo")
+            final=",format=nv12,hwupload"
+            opciones=(-rc_mode CQP -global_quality "$q255") ;;
+        *_vaapi)
+            entrada_hw=(-vaapi_device "$dispositivo")
+            final=",format=nv12,hwupload"
+            opciones=(-rc_mode CQP -qp "$calidad") ;;
+        av1_nvenc) opciones=(-preset p5 -rc constqp -qp "$q255" -pix_fmt yuv420p) ;;
+        *_nvenc) opciones=(-preset p5 -rc constqp -qp "$calidad" -pix_fmt yuv420p) ;;
+        libx264) opciones=(-preset slow -crf "$calidad" -pix_fmt yuv420p) ;;
+        libx265) opciones=(-preset medium -crf "$((calidad + 2))" -pix_fmt yuv420p
+                           -x265-params log-level=error) ;;
+        libvpx-vp9) opciones=(-b:v 0 -crf "$((calidad + 8))" -row-mt 1 -pix_fmt yuv420p) ;;
+        libsvtav1) opciones=(-preset 8 -crf "$((calidad + 8))" -pix_fmt yuv420p) ;;
+        *) echo "codificador desconocido: $enc" >&2; return 1 ;;
     esac
-    timeout 15 ffmpeg -nostdin -v error "${hw[@]}" -f lavfi -i color=c=gray:s=320x240:r=30:d=0.2 \
-        -vf "$vf" -c:v "$enc" -f null - >/dev/null 2>&1
+    # hvc1 (cabeceras solo fuera del flujo) para libx265; con hevc_vaapi, no: en Raven/Picasso
+    # (radeonsi, Mesa 25) las cabeceras de fuera no casan con el flujo y sale basura.
+    [[ $enc == libx265 ]] && opciones+=(-tag:v hvc1)
+    return 0
+}
+
+# ¿Funciona de verdad este codificador? ffmpeg lista los VA-API aunque la GPU no los tenga, y
+# hay drivers que codifican sin error pero dan basura: se codifica un patrón con las opciones de
+# verdad y se compara lo que sale con el original.
+prueba_codificador() {
+    local enc=$1 entrada_hw=() final="" opciones=() tmp ssim
+    opciones_de "$enc" 28 || return 1
+    tmp=$(mktemp --suffix=.mp4) || return 1
+    local patron=testsrc2=s=320x240:r=30:d=1
+    if timeout 20 ffmpeg -nostdin -y -v error "${entrada_hw[@]}" -f lavfi -i "$patron" \
+        -vf "format=yuv420p$final" -c:v "$enc" "${opciones[@]}" -movflags +faststart "$tmp" >/dev/null 2>&1; then
+        ssim=$(ffmpeg -nostdin -i "$tmp" -f lavfi -i "$patron" -lavfi "[0:v][1:v]ssim" -f null - 2>&1 |
+            sed -n 's/.*All:\([0-9.]*\).*/\1/p' | tail -1)
+    fi
+    rm -f "$tmp"
+    LC_NUMERIC=C awk -v s="${ssim:-0}" 'BEGIN { exit !(s >= 0.9) }'
 }
 
 detectar_capacidades() {
@@ -84,11 +124,14 @@ detectar_capacidades() {
     echo "codifica-gpu ${cod_gpu[*]}"
     echo "recomendado $recomendado"
     echo "codificador $codificador"
+    # Marca de que los codificadores se probaron comparando la imagen (las cachés de antes no).
+    echo "prueba calidad"
 }
 
 capacidades() {  # $1 = forzar (1/0)
     if [[ ${1:-0} == 0 && -f $CACHE_CAP ]] &&
         grep -qx "equipo $(hostname 2>/dev/null || cat /etc/hostname)" "$CACHE_CAP" &&
+        grep -qx "prueba calidad" "$CACHE_CAP" &&
         [[ -n $(find "$CACHE_CAP" -mtime -7 2>/dev/null) ]]; then
         cat "$CACHE_CAP"
         return
@@ -176,30 +219,7 @@ fi
 
 codificar() {  # $1 = codificador de ffmpeg
     local enc=$1 entrada_hw=() final="" opciones=()
-    # AV1 y VP9 por GPU cuantizan en 0-255: la misma equivalencia que con SVT-AV1 (CRF = calidad
-    # + 8) y unas 4 unidades de índice por punto de CRF. 24 → 128, 28 → 144, 32 → 160.
-    local q255=$(((calidad + 8) * 4))
-    ((q255 > 255)) && q255=255
-    case "$enc" in
-        av1_vaapi|vp9_vaapi)
-            # No tienen -qp (ffmpeg lo ignoraría y usaría su calidad por defecto, altísima).
-            entrada_hw=(-vaapi_device "$dispositivo")
-            final=",format=nv12,hwupload"
-            opciones=(-rc_mode CQP -global_quality "$q255") ;;
-        *_vaapi)
-            entrada_hw=(-vaapi_device "$dispositivo")
-            final=",format=nv12,hwupload"
-            opciones=(-rc_mode CQP -qp "$calidad") ;;
-        av1_nvenc) opciones=(-preset p5 -rc constqp -qp "$q255" -pix_fmt yuv420p) ;;
-        *_nvenc) opciones=(-preset p5 -rc constqp -qp "$calidad" -pix_fmt yuv420p) ;;
-        libx264) opciones=(-preset slow -crf "$calidad" -pix_fmt yuv420p) ;;
-        libx265) opciones=(-preset medium -crf "$((calidad + 2))" -pix_fmt yuv420p
-                           -x265-params log-level=error) ;;
-        libvpx-vp9) opciones=(-b:v 0 -crf "$((calidad + 8))" -row-mt 1 -pix_fmt yuv420p) ;;
-        libsvtav1) opciones=(-preset 8 -crf "$((calidad + 8))" -pix_fmt yuv420p) ;;
-        *) echo "codificador desconocido: $enc" >&2; return 1 ;;
-    esac
-    [[ $enc == hevc_* || $enc == libx265 ]] && opciones+=(-tag:v hvc1)
+    opciones_de "$enc" "$calidad" || return 1
     local extra=(-nostats -loglevel error)
     ((progreso)) && extra+=(-progress pipe:1)
     ((progreso)) && echo "CODIFICADOR $enc"
