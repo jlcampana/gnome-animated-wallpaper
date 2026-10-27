@@ -2,10 +2,12 @@
 //! por fondo aunque tenga dos versiones (la original y la de 30 fps, en la subcarpeta «30 fps»).
 //! Clic: usar de fondo la versión preferida. Menú de cada fondo: elegir versión, crear o borrar
 //! la de 30 fps, convertir, quitar audio, abrir carpeta, borrar. La información de cada vídeo
-//! (fps, resolución…) sale de la base de datos (bd.rs) y permite filtrar por fps.
+//! (fps, resolución…) sale de la base de datos (bd.rs) y permite filtrar por fps. La estrella de
+//! cada miniatura lo marca como favorito (bd.rs, por nombre) y el botón «Favoritos» enseña solo
+//! esos.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -101,6 +103,9 @@ pub struct Biblioteca {
     rejilla: gtk::FlowBox,
     filtro: gtk::SearchEntry,
     filtro_fps: gtk::DropDown,
+    solo_favoritos: gtk::ToggleButton,
+    /// Nombres de los fondos favoritos.
+    favoritos: RefCell<HashSet<String>>,
     tarjetas: RefCell<Vec<Tarjeta>>,
     infos: RefCell<HashMap<PathBuf, InfoVideo>>,
     /// Para no aplicar la información de una recarga anterior.
@@ -132,6 +137,10 @@ impl Biblioteca {
             .build();
         let filtro_fps = gtk::DropDown::from_strings(FILTROS);
         filtro_fps.set_tooltip_text(Some("Filtrar por fotogramas por segundo"));
+        let solo_favoritos = gtk::ToggleButton::builder()
+            .child(&adw::ButtonContent::builder().icon_name("starred-symbolic").label("Favoritos").build())
+            .tooltip_text("Ver solo los favoritos")
+            .build();
         let barra = gtk::Box::builder()
             .spacing(8)
             .margin_top(12)
@@ -141,6 +150,7 @@ impl Biblioteca {
             .build();
         barra.append(&filtro);
         barra.append(&filtro_fps);
+        barra.append(&solo_favoritos);
 
         let caja = gtk::Box::new(gtk::Orientation::Vertical, 0);
         caja.append(&barra);
@@ -170,6 +180,8 @@ impl Biblioteca {
             rejilla,
             filtro,
             filtro_fps,
+            solo_favoritos,
+            favoritos: RefCell::default(),
             tarjetas: RefCell::default(),
             infos: RefCell::default(),
             generacion: Cell::new(0),
@@ -190,6 +202,14 @@ impl Biblioteca {
         {
             let debil = Rc::downgrade(&yo);
             yo.filtro.connect_search_changed(move |_| {
+                if let Some(yo) = debil.upgrade() {
+                    yo.aplicar_filtro();
+                }
+            });
+        }
+        {
+            let debil = Rc::downgrade(&yo);
+            yo.solo_favoritos.connect_toggled(move |_| {
                 if let Some(yo) = debil.upgrade() {
                     yo.aplicar_filtro();
                 }
@@ -319,6 +339,8 @@ impl Biblioteca {
             self.rejilla.remove(&hijo);
         }
         self.tarjetas.borrow_mut().clear();
+        // Al día por si han llegado de una lista importada.
+        self.favoritos.replace(bd::favoritos());
         let fondos = self.fondos();
         self.raiz.set_visible_child_name(if fondos.is_empty() { "vacia" } else { "lista" });
         let rutas: Vec<PathBuf> = fondos.iter().flat_map(Fondo::rutas).collect();
@@ -374,10 +396,30 @@ impl Biblioteca {
         let texto = self.filtro.text().to_lowercase();
         let filtro = self.filtro_fps.selected();
         let infos = self.infos.borrow();
+        let solo_favoritos = self.solo_favoritos.is_active();
+        let favoritos = self.favoritos.borrow();
         for t in self.tarjetas.borrow().iter() {
             let por_nombre = texto.is_empty() || t.fondo.nombre.to_lowercase().contains(&texto);
-            t.hijo.set_visible(por_nombre && pasa_filtro(filtro, &t.fondo, &infos));
+            let por_favorito = !solo_favoritos || favoritos.contains(&t.fondo.nombre);
+            t.hijo.set_visible(por_nombre && por_favorito && pasa_filtro(filtro, &t.fondo, &infos));
         }
+    }
+
+    /// Cambia el favorito de un fondo y lo guarda.
+    fn alternar_favorito(&self, nombre: &str, estrella: &gtk::Button) {
+        let favorito = !self.favoritos.borrow().contains(nombre);
+        if let Err(e) = bd::poner_favoritos(&[nombre.to_string()], favorito) {
+            self.ctx.aviso(&format!("No se pudo guardar el favorito: {e}"));
+            return;
+        }
+        if favorito {
+            self.favoritos.borrow_mut().insert(nombre.to_string());
+        } else {
+            self.favoritos.borrow_mut().remove(nombre);
+        }
+        pintar_estrella(estrella, favorito);
+        // Con «Favoritos» activo, el que deja de serlo se va.
+        self.aplicar_filtro();
     }
 
     fn marcar_actual(&self) {
@@ -439,6 +481,26 @@ impl Biblioteca {
             .visible(false)
             .build();
         encima.add_overlay(&activa);
+        // Abajo a la izquierda: arriba están la marca del fondo actual y «Activa», y abajo a la
+        // derecha los fps.
+        let estrella = gtk::Button::builder()
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::End)
+            .margin_start(6)
+            .margin_bottom(6)
+            .css_classes(["osd", "circular", "estrella"])
+            .build();
+        pintar_estrella(&estrella, self.favoritos.borrow().contains(&fondo.nombre));
+        {
+            let debil = Rc::downgrade(self);
+            let nombre = fondo.nombre.clone();
+            estrella.connect_clicked(move |b| {
+                if let Some(yo) = debil.upgrade() {
+                    yo.alternar_favorito(&nombre, b);
+                }
+            });
+        }
+        encima.add_overlay(&estrella);
 
         let titulo = gtk::Label::builder()
             .label(&fondo.nombre)
@@ -754,6 +816,16 @@ fn menu(fondo: &Fondo) -> gio::Menu {
     resto.append(Some("Borrar"), Some("tarjeta.borrar"));
     menu.append_section(None, &resto);
     menu
+}
+
+fn pintar_estrella(b: &gtk::Button, favorito: bool) {
+    b.set_icon_name(if favorito { "starred-symbolic" } else { "non-starred-symbolic" });
+    b.set_tooltip_text(Some(if favorito { "Quitar de favoritos" } else { "Añadir a favoritos" }));
+    if favorito {
+        b.add_css_class("favorito");
+    } else {
+        b.remove_css_class("favorito");
+    }
 }
 
 fn nombre(ruta: &Path) -> String {

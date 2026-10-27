@@ -63,11 +63,6 @@ impl Fuente {
         }
     }
 
-    /// La fuente de esa web (la de Fuente::web), si es una de las nuestras.
-    pub fn de_web(web: &str) -> Option<Fuente> {
-        Fuente::TODAS.into_iter().find(|f| f.web() == web)
-    }
-
     /// Se puede buscar y descargar desde la app; si no, va por el navegador integrado.
     pub fn nativa(self) -> bool {
         self != Fuente::VsThemes

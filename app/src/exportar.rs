@@ -1,6 +1,6 @@
-//! Exportar la lista de fondos de la biblioteca a un JSON (qué hay, de qué web salió cada uno y
-//! cómo bajarlo, más los favoritos de Explorar) e importarla en otro equipo, que se baja los
-//! fondos que le falten y añade los favoritos que no tenga. Para compartir fondos entre equipos
+//! Exportar la lista de fondos de la biblioteca a un JSON (qué hay, de qué web salió cada uno,
+//! cómo bajarlo y si es favorito) e importarla en otro equipo, que se baja los fondos que le
+//! falten y marca como favoritos los que lo sean en la lista. Para compartir fondos entre equipos
 //! sin copiar los vídeos.
 //!
 //! El origen de cada vídeo lo apunta el gestor al importarlo (bd.rs, tabla «origenes»). Los que
@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::bd::{self, Origen};
 use crate::contexto::Contexto;
 use crate::descargas::Descargas;
-use crate::fuentes::{Fuente, Resultado};
+use crate::fuentes::Fuente;
 use crate::{biblioteca::Biblioteca, config};
 
 const FORMATO: &str = "fondos-animados/lista";
@@ -37,6 +37,7 @@ pub struct Entrada {
     pub descarga: Option<String>,
     pub resolucion: Option<(u32, u32)>,
     pub fps: Option<f64>,
+    pub favorito: bool,
 }
 
 fn nombre(ruta: &Path) -> String {
@@ -151,6 +152,7 @@ pub fn reunir(videos: &[PathBuf]) -> Vec<Entrada> {
     recomponer(videos);
     let infos = bd::sincronizar(videos);
     let origenes = bd::origenes();
+    let favoritos = bd::favoritos();
     videos
         .iter()
         .map(|ruta| {
@@ -159,25 +161,18 @@ pub fn reunir(videos: &[PathBuf]) -> Vec<Entrada> {
             let origen = origenes.get(ruta).cloned();
             Entrada {
                 titulo: origen.as_ref().and_then(|o| o.titulo.clone()).unwrap_or_else(|| nombre.clone()),
-                nombre,
                 pagina: origen.as_ref().map(|o| o.pagina.clone()),
                 descarga: origen.and_then(|o| o.descarga),
                 resolucion: info.map(|i| (i.ancho, i.alto)),
                 fps: info.map(|i| i.fps),
+                favorito: favoritos.contains(&nombre),
+                nombre,
             }
         })
         .collect()
 }
 
-/// Lo que trae una lista exportada.
-#[derive(Debug, PartialEq)]
-pub struct Lista {
-    pub fondos: Vec<Entrada>,
-    /// (web de la fuente, resultado), como en bd::favoritos.
-    pub favoritos: Vec<(String, Resultado)>,
-}
-
-pub fn a_json(entradas: &[Entrada], favoritos: &[(String, Resultado)]) -> String {
+pub fn a_json(entradas: &[Entrada]) -> String {
     let fondos: Vec<Value> = entradas
         .iter()
         .map(|e| {
@@ -189,18 +184,7 @@ pub fn a_json(entradas: &[Entrada], favoritos: &[(String, Resultado)]) -> String
                 "descarga": e.descarga,
                 "resolucion": e.resolucion.map(|(w, h)| format!("{w}x{h}")),
                 "fps": e.fps.map(|f| (f * 100.0).round() / 100.0),
-            })
-        })
-        .collect();
-    let favoritos: Vec<Value> = favoritos
-        .iter()
-        .map(|(web, r)| {
-            json!({
-                "titulo": r.titulo,
-                "web": web,
-                "pagina": r.pagina,
-                "miniatura": r.miniatura,
-                "resolucion": r.resolucion,
+                "favorito": e.favorito,
             })
         })
         .collect();
@@ -211,12 +195,11 @@ pub fn a_json(entradas: &[Entrada], favoritos: &[(String, Resultado)]) -> String
         "equipo": glib::host_name().as_str(),
         "fecha": glib::DateTime::now_local().ok().and_then(|d| d.format_iso8601().ok()).map(|f| f.to_string()),
         "fondos": fondos,
-        "favoritos": favoritos,
     });
     serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n"
 }
 
-pub fn de_json(texto: &str) -> Result<Lista, String> {
+pub fn de_json(texto: &str) -> Result<Vec<Entrada>, String> {
     let doc: Value = serde_json::from_str(texto).map_err(|e| format!("no es un JSON válido: {e}"))?;
     if doc["formato"] != FORMATO {
         return Err("no es una lista de fondos exportada con Fondos animados".into());
@@ -226,24 +209,7 @@ pub fn de_json(texto: &str) -> Result<Lista, String> {
     }
     let texto = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
     let fondos = doc["fondos"].as_array().ok_or("la lista no tiene fondos")?;
-    // Las listas de la 0.6.0 no traen favoritos.
-    let favoritos = doc["favoritos"]
-        .as_array()
-        .map(|l| {
-            l.iter()
-                .filter_map(|f| {
-                    let r = Resultado {
-                        titulo: texto(&f["titulo"])?,
-                        pagina: texto(&f["pagina"])?,
-                        miniatura: texto(&f["miniatura"]).unwrap_or_default(),
-                        resolucion: texto(&f["resolucion"]),
-                    };
-                    Some((texto(&f["web"])?, r))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let fondos = fondos
+    Ok(fondos
         .iter()
         .filter_map(|f| {
             let nombre = texto(&f["nombre"])?;
@@ -257,10 +223,11 @@ pub fn de_json(texto: &str) -> Result<Lista, String> {
                     Some((w.parse().ok()?, h.parse().ok()?))
                 }),
                 fps: f["fps"].as_f64(),
+                // Las listas de la 0.6.0 no lo traen.
+                favorito: f["favorito"].as_bool().unwrap_or(false),
             })
         })
-        .collect();
-    Ok(Lista { fondos, favoritos })
+        .collect())
 }
 
 /// Qué hacer con cada fondo de una lista importada.
@@ -271,7 +238,7 @@ pub struct Plan {
     /// Solo se pueden bajar con el navegador integrado (vsthemes).
     pub navegador: Vec<Entrada>,
     pub sin_origen: Vec<Entrada>,
-    /// Favoritos de la lista que no estaban (ya añadidos).
+    /// Fondos marcados como favoritos por la lista que no lo eran (ya marcados).
     pub favoritos_nuevos: usize,
 }
 
@@ -311,8 +278,8 @@ fn filtro_json() -> gio::ListStore {
 /// Pide dónde guardar la lista y la guarda (buscando antes el origen de los que no lo tengan).
 pub fn exportar(ctx: &Rc<Contexto>, biblioteca: &Rc<Biblioteca>) {
     let videos = biblioteca.principales();
-    if videos.is_empty() && bd::favoritos().is_empty() {
-        ctx.aviso("No hay fondos ni favoritos que exportar");
+    if videos.is_empty() {
+        ctx.aviso("La biblioteca está vacía: no hay nada que exportar");
         return;
     }
     let dialogo = gtk::FileDialog::builder()
@@ -330,17 +297,15 @@ pub fn exportar(ctx: &Rc<Contexto>, biblioteca: &Rc<Biblioteca>) {
         glib::spawn_future_local(async move {
             let r = gio::spawn_blocking(move || {
                 let entradas = reunir(&videos);
-                let favoritos = bd::favoritos();
-                std::fs::write(&destino, a_json(&entradas, &favoritos))
-                    .map(|_| (entradas, favoritos.len()))
-                    .map_err(|e| e.to_string())
+                std::fs::write(&destino, a_json(&entradas)).map(|_| entradas).map_err(|e| e.to_string())
             })
             .await
             .unwrap_or_else(|_| Err("ha fallado la exportación".into()));
             match r {
-                Ok((entradas, favoritos)) => {
+                Ok(entradas) => {
                     let sin = entradas.iter().filter(|e| e.pagina.is_none()).count();
-                    let mut texto = format!("Lista de {} fondo(s) y {favoritos} favorito(s) exportada", entradas.len());
+                    let favoritos = entradas.iter().filter(|e| e.favorito).count();
+                    let mut texto = format!("Lista de {} fondo(s) exportada ({favoritos} favorito(s))", entradas.len());
                     if sin > 0 {
                         texto.push_str(&format!("; de {sin} no se sabe de dónde salieron"));
                     }
@@ -364,16 +329,15 @@ pub fn importar(ctx: &Rc<Contexto>, biblioteca: &Rc<Biblioteca>, descargas: &Rc<
         glib::spawn_future_local(async move {
             let plan = gio::spawn_blocking(move || -> Result<Plan, String> {
                 let texto = std::fs::read_to_string(&fichero).map_err(|e| e.to_string())?;
-                let lista = de_json(&texto)?;
-                // Los favoritos que falten se añaden ya (no se baja nada con ellos).
-                let tengo: HashSet<String> = bd::favoritos().into_iter().map(|(_, r)| r.pagina).collect();
-                let mut favoritos_nuevos = 0;
-                for (web, r) in lista.favoritos.iter().filter(|(_, r)| !tengo.contains(&r.pagina)) {
-                    match bd::poner_favorito(web, r, true) {
-                        Ok(()) => favoritos_nuevos += 1,
-                        Err(e) => crate::depurar!("favorito {}: {e}", r.pagina),
-                    }
-                }
+                let entradas = de_json(&texto)?;
+                // Los favoritos se marcan ya, por nombre: los que se bajen llegarán marcados.
+                let tengo = bd::favoritos();
+                let nuevos: Vec<String> = entradas
+                    .iter()
+                    .filter(|e| e.favorito && !tengo.contains(&e.nombre))
+                    .map(|e| e.nombre.clone())
+                    .collect();
+                bd::poner_favoritos(&nuevos, true)?;
                 let nombres: HashSet<String> = videos.iter().map(|v| nombre(v)).collect();
                 let presentes: HashSet<&PathBuf> = videos.iter().collect();
                 let paginas = bd::origenes()
@@ -381,14 +345,20 @@ pub fn importar(ctx: &Rc<Contexto>, biblioteca: &Rc<Biblioteca>, descargas: &Rc<
                     .filter(|(ruta, _)| presentes.contains(ruta))
                     .map(|(_, o)| o.pagina)
                     .collect();
-                let mut plan = planificar(lista.fondos, &nombres, &paginas);
-                plan.favoritos_nuevos = favoritos_nuevos;
+                let mut plan = planificar(entradas, &nombres, &paginas);
+                plan.favoritos_nuevos = nuevos.len();
                 Ok(plan)
             })
             .await
             .unwrap_or_else(|_| Err("ha fallado la importación".into()));
             match plan {
-                Ok(plan) => confirmar(&ctx, &descargas, plan).await,
+                Ok(plan) => {
+                    if plan.favoritos_nuevos > 0 {
+                        // Las estrellas de los que ya están.
+                        ctx.biblioteca_cambiada();
+                    }
+                    confirmar(&ctx, &descargas, plan).await
+                }
                 Err(e) => ctx.aviso(&format!("No se pudo leer la lista: {e}")),
             }
         });
@@ -428,7 +398,7 @@ async fn confirmar(ctx: &Rc<Contexto>, descargas: &Rc<Descargas>, plan: Plan) {
         )
     };
     if plan.favoritos_nuevos > 0 {
-        cuerpo.push_str(&format!(" Añadidos {} favorito(s) a Explorar.", plan.favoritos_nuevos));
+        cuerpo.push_str(&format!(" {} fondo(s) marcados como favoritos.", plan.favoritos_nuevos));
     }
     let dialogo = adw::AlertDialog::new(Some(&titulo), Some(&cuerpo));
     let texto = gtk::Label::builder()
@@ -475,6 +445,7 @@ mod pruebas {
             descarga: descarga.map(str::to_string),
             resolucion: Some((1920, 1080)),
             fps: Some(29.97),
+            favorito: nombre.starts_with('s'),
         }
     }
 
@@ -491,16 +462,13 @@ mod pruebas {
             entrada("sunset-rx-7", Some("https://moewalls.com/cars/sunset-rx-7/"), Some("https://go.moewalls.com/d?v=1")),
             entrada("mio", None, None),
         ];
-        let favoritos = vec![(
-            "https://motionbgs.com".to_string(),
-            Resultado { titulo: "Mio".into(), pagina: "https://motionbgs.com/mio".into(), miniatura: "m".into(), resolucion: None },
-        )];
-        let texto = a_json(&entradas, &favoritos);
+        let texto = a_json(&entradas);
         assert!(texto.contains("\"web\": \"moewalls.com\""));
-        assert_eq!(de_json(&texto).unwrap(), Lista { fondos: entradas, favoritos });
-        // Una lista sin favoritos (de la 0.6.0) también vale.
-        let vieja = r#"{"formato": "fondos-animados/lista", "version": 1, "fondos": []}"#;
-        assert!(de_json(vieja).unwrap().favoritos.is_empty());
+        assert!(texto.contains("\"favorito\": true"));
+        assert_eq!(de_json(&texto).unwrap(), entradas);
+        // Una lista de la 0.6.0 (sin «favorito») también vale.
+        let vieja = r#"{"formato": "fondos-animados/lista", "version": 1, "fondos": [{"nombre": "a"}]}"#;
+        assert!(!de_json(vieja).unwrap()[0].favorito);
         assert!(de_json("{\"fondos\": []}").is_err());
         assert!(de_json(&texto.replace("\"version\": 1", "\"version\": 99")).is_err());
     }
