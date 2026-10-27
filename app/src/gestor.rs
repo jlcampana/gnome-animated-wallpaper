@@ -24,7 +24,7 @@ use gtk::prelude::*;
 
 use crate::cola::{self, TipoConversion, Trabajo};
 use crate::importar::Avance;
-use crate::{config, importar, red};
+use crate::{bd, config, importar, red};
 
 /// Segundos sin nada que hacer antes de cerrarse.
 const ESPERA_ANTES_DE_SALIR: u64 = 10;
@@ -344,6 +344,13 @@ fn importar(t: Trabajo) {
     let resultado = match r {
         Ok(mut r) => {
             registro!("«{}» → {}", t.nombre, r.ruta.display());
+            // De dónde salió (para exportar la biblioteca): la página es el referer.
+            if let Some(pagina) = &t.referer {
+                let origen = bd::Origen { pagina: pagina.clone(), descarga: t.url.clone(), titulo: t.titulo.clone() };
+                if let Err(e) = bd::guardar_origen(&r.ruta, &origen) {
+                    registro!("no se pudo guardar el origen de «{}»: {e}", t.nombre);
+                }
+            }
             if let Some(calidad) = a.version_30.filter(|_| importar::mas_de_30_fps(r.info.fps)) {
                 match cola::encolar_version_30(&mut con, &r.ruta, calidad, a) {
                     Ok(_) => r.avisos.push(format!("su versión de 30 fps va a la cola (el original va a {:.0})", r.info.fps)),
@@ -452,6 +459,11 @@ fn terminar_conversion(
     }
     std::fs::rename(temporal, &final_).map_err(|e| e.to_string())?;
     registro!("«{}» → {}", t.nombre, final_.display());
+    if c.reemplazar {
+        if let Err(e) = bd::mover_origen(origen, &final_) {
+            registro!("no se pudo mover el origen de «{}»: {e}", t.nombre);
+        }
+    }
 
     if let Some(ajustes) = config::ajustes() {
         let actual = PathBuf::from(ajustes.string("video").as_str());

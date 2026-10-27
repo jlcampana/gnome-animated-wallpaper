@@ -1,4 +1,5 @@
-//! Lo que comparten todas las páginas: ajustes, ventana, avisos y miniaturas.
+//! Lo que comparten todas las páginas: ajustes, ventana, avisos (notificaciones de GNOME) y
+//! miniaturas.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,6 @@ use crate::{config, importar};
 pub struct Contexto {
     pub ajustes: gio::Settings,
     pub ventana: adw::ApplicationWindow,
-    pub avisos: adw::ToastOverlay,
     /// Se avisa a quien escuche (la biblioteca) cuando entra un vídeo nuevo.
     al_cambiar_biblioteca: RefCell<Vec<Box<dyn Fn()>>>,
     /// Ir a la página del navegador con una URL.
@@ -25,11 +25,10 @@ pub struct Contexto {
 }
 
 impl Contexto {
-    pub fn new(ajustes: gio::Settings, ventana: adw::ApplicationWindow, avisos: adw::ToastOverlay) -> Rc<Self> {
+    pub fn new(ajustes: gio::Settings, ventana: adw::ApplicationWindow) -> Rc<Self> {
         Rc::new(Self {
             ajustes,
             ventana,
-            avisos,
             al_cambiar_biblioteca: RefCell::default(),
             abrir_navegador: RefCell::default(),
             buscar_actualizacion: RefCell::default(),
@@ -84,9 +83,16 @@ impl Contexto {
         self.ajustes.boolean("create-30fps").then(|| self.calidad_30())
     }
 
+    /// Notificación de GNOME (los avisos dentro de la ventana tapaban los botones de abajo).
     pub fn aviso(&self, texto: &str) {
-        // Sin markup: los títulos de los vídeos pueden llevar «&» y similares.
-        self.avisos.add_toast(adw::Toast::builder().title(texto).use_markup(false).build());
+        self.notificar(&gio::Notification::new(texto));
+    }
+
+    fn notificar(&self, n: &gio::Notification) {
+        match self.ventana.application() {
+            Some(app) => app.send_notification(None, n),
+            None => crate::depurar!("aviso sin aplicación: {n:?}"),
+        }
     }
 
     pub fn biblioteca(&self) -> PathBuf {
@@ -118,18 +124,15 @@ impl Contexto {
         }
     }
 
-    /// Aviso con un botón «Usar de fondo».
-    pub fn aviso_importado(self: &Rc<Self>, ruta: &Path, avisos: &[String]) {
+    /// Aviso con un botón «Usar de fondo» (la acción app.usar-video, de main.rs).
+    pub fn aviso_importado(&self, ruta: &Path, avisos: &[String]) {
         let nombre = ruta.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let mut texto = format!("«{nombre}» añadido a la biblioteca");
+        let n = gio::Notification::new(&format!("«{nombre}» añadido a la biblioteca"));
         if !avisos.is_empty() {
-            texto.push_str(&format!(" ({})", avisos.join("; ")));
+            n.set_body(Some(&avisos.join("\n")));
         }
-        let toast = adw::Toast::builder().title(texto).use_markup(false).button_label("Usar de fondo").timeout(8).build();
-        let ctx = self.clone();
-        let ruta = ruta.to_path_buf();
-        toast.connect_button_clicked(move |_| ctx.usar_video(&ruta));
-        self.avisos.add_toast(toast);
+        n.add_button_with_target_value("Usar de fondo", "app.usar-video", Some(&ruta.to_string_lossy().to_variant()));
+        self.notificar(&n);
     }
 }
 

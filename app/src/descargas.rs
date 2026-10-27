@@ -296,9 +296,60 @@ impl Descargas {
         self.avisar_encolado(titulo, r);
     }
 
+    /// Varias descargas de una vez (de una lista importada): (título, descarga, página). Un
+    /// solo aviso con el resumen.
+    pub fn descargar_lista(self: &Rc<Self>, lista: &[(String, String, String)]) {
+        let ajustes = self.ajustes_importar(self.ctx.optimizar_descargas());
+        let (mut nuevas, mut ya, mut errores) = (0, 0, 0);
+        for (titulo, url, pagina) in lista {
+            let r = self.con(|c| {
+                cola::encolar(
+                    c,
+                    &cola::Nuevo {
+                        clave: pagina,
+                        nombre: titulo,
+                        titulo: Some(titulo),
+                        url: Some(url),
+                        referer: Some(pagina),
+                        fichero: None,
+                        mover: true,
+                        usar: false,
+                        ajustes: &ajustes,
+                        conversion: None,
+                        destino: None,
+                    },
+                )
+            });
+            match r {
+                Ok(Encolado::YaEstaba) => ya += 1,
+                Ok(_) => nuevas += 1,
+                Err(e) => {
+                    crate::depurar!("{e}");
+                    errores += 1;
+                }
+            }
+        }
+        let mut texto = format!("{nuevas} fondo(s) añadidos a la cola de descargas");
+        if ya > 0 {
+            texto.push_str(&format!("; {ya} ya estaban"));
+        }
+        if errores > 0 {
+            texto.push_str(&format!("; {errores} con errores"));
+        }
+        self.ctx.aviso(&texto);
+        self.refrescar();
+    }
+
     /// Un fichero a importar: de los que elige el usuario (se copia) o bajado por el navegador
-    /// (se mueve).
-    fn encolar_fichero(self: &Rc<Self>, ruta: &Path, nombre: &str, mover: bool, optimizar: Option<(i32, i32)>) {
+    /// (se mueve; `pagina`, de dónde se bajó).
+    fn encolar_fichero(
+        self: &Rc<Self>,
+        ruta: &Path,
+        nombre: &str,
+        mover: bool,
+        optimizar: Option<(i32, i32)>,
+        pagina: Option<&str>,
+    ) {
         let ajustes = self.ajustes_importar(optimizar);
         let clave = ruta.to_string_lossy();
         let r = self.con(|c| {
@@ -309,7 +360,7 @@ impl Descargas {
                     nombre,
                     titulo: None,
                     url: None,
-                    referer: None,
+                    referer: pagina,
                     fichero: Some(ruta),
                     mover,
                     usar: false,
@@ -578,6 +629,8 @@ impl Descargas {
                 texto.set_label(&format!("Error: {error}"));
             });
         }
+        // La página desde la que se bajó (la descarga puede acabar con la pestaña ya en otra).
+        let pagina = descarga.web_view().and_then(|w| webkit6::prelude::WebViewExt::uri(&w)).map(|u| u.to_string());
         let debil = Rc::downgrade(self);
         descarga.connect_finished(move |d| {
             let Some(yo) = debil.upgrade() else { return };
@@ -589,7 +642,7 @@ impl Descargas {
                     // Ya en la cola: esta fila sobra.
                     yo.lista_navegador.remove(&fila);
                     let nombre = nombre.label().to_string();
-                    yo.encolar_fichero(&fichero, &nombre, true, yo.ctx.optimizar_descargas());
+                    yo.encolar_fichero(&fichero, &nombre, true, yo.ctx.optimizar_descargas(), pagina.as_deref());
                 }
                 _ => {
                     if let Some(f) = destino {
@@ -612,7 +665,7 @@ impl Descargas {
     pub fn importar_locales(self: &Rc<Self>, rutas: Vec<PathBuf>) {
         for ruta in rutas {
             let nombre = ruta.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            self.encolar_fichero(&ruta, &nombre, false, None);
+            self.encolar_fichero(&ruta, &nombre, false, None, None);
         }
     }
 

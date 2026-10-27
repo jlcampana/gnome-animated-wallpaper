@@ -1,7 +1,8 @@
 //! Base de datos de la biblioteca (SQLite, en ~/.local/share/fondos-animados/biblioteca.db): lo
 //! que se sabe de cada vídeo (fps, resolución, códec…), para no lanzar ffprobe en cada recarga.
-//! Una fila sirve mientras el fichero no cambie de tamaño ni de fecha. Todo bloqueante: se
-//! llama desde gio::spawn_blocking.
+//! Una fila sirve mientras el fichero no cambie de tamaño ni de fecha. Guarda también de dónde
+//! se bajó cada vídeo (tabla «origenes»), para exportar la biblioteca. Todo bloqueante: se llama
+//! desde gio::spawn_blocking (o desde el gestor de descargas).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -32,7 +33,15 @@ fn abrir_en(ruta: &Path) -> rusqlite::Result<Connection> {
             duracion   REAL NOT NULL,
             codec      TEXT NOT NULL,
             audio      INTEGER NOT NULL
-        )",
+        );
+        CREATE TABLE IF NOT EXISTS origenes (
+            ruta     TEXT PRIMARY KEY,
+            pagina   TEXT NOT NULL,
+            descarga TEXT,
+            titulo   TEXT
+        );
+        -- Vídeos sin origen apuntado que ya se buscaron en las webs sin dar con ellos.
+        CREATE TABLE IF NOT EXISTS sin_origen (ruta TEXT PRIMARY KEY);",
     )?;
     Ok(con)
 }
@@ -113,6 +122,79 @@ fn sincronizar_en(con: &Connection, rutas: &[PathBuf]) -> HashMap<PathBuf, InfoV
     infos
 }
 
+/// De dónde salió un vídeo de la biblioteca.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Origen {
+    /// La página del vídeo en la web.
+    pub pagina: String,
+    /// La dirección de descarga (None: se bajó con el navegador integrado).
+    pub descarga: Option<String>,
+    pub titulo: Option<String>,
+}
+
+pub fn guardar_origen(ruta: &Path, o: &Origen) -> Result<(), String> {
+    guardar_origen_en(&abrir().map_err(|e| e.to_string())?, ruta, o).map_err(|e| e.to_string())
+}
+
+fn guardar_origen_en(con: &Connection, ruta: &Path, o: &Origen) -> rusqlite::Result<()> {
+    let ruta = ruta.to_string_lossy();
+    con.execute(
+        "INSERT OR REPLACE INTO origenes (ruta, pagina, descarga, titulo) VALUES (?1, ?2, ?3, ?4)",
+        params![ruta, o.pagina, o.descarga, o.titulo],
+    )?;
+    con.execute("DELETE FROM sin_origen WHERE ruta = ?1", [&ruta])?;
+    Ok(())
+}
+
+/// Se buscó el origen de `ruta` y no se encontró: no volver a buscarlo.
+pub fn marcar_sin_origen(ruta: &Path) -> Result<(), String> {
+    let con = abrir().map_err(|e| e.to_string())?;
+    con.execute("INSERT OR IGNORE INTO sin_origen (ruta) VALUES (?1)", [ruta.to_string_lossy()])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Los vídeos ya buscados sin éxito.
+pub fn sin_origen() -> HashSet<PathBuf> {
+    abrir()
+        .and_then(|con| {
+            let mut c = con.prepare("SELECT ruta FROM sin_origen")?;
+            c.query_map([], |f| Ok(PathBuf::from(f.get::<_, String>(0)?)))?.collect()
+        })
+        .unwrap_or_default()
+}
+
+/// El vídeo ha cambiado de sitio (una conversión que sustituye al original): su origen, con él.
+pub fn mover_origen(de: &Path, a: &Path) -> Result<(), String> {
+    if de == a {
+        return Ok(());
+    }
+    let con = abrir().map_err(|e| e.to_string())?;
+    con.execute(
+        "UPDATE OR REPLACE origenes SET ruta = ?1 WHERE ruta = ?2",
+        params![a.to_string_lossy(), de.to_string_lossy()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Todos los orígenes conocidos (también de vídeos que ya no estén: se filtra al usarlos, y así
+/// no se pierden si la biblioteca cambia de carpeta un rato).
+pub fn origenes() -> HashMap<PathBuf, Origen> {
+    abrir().and_then(|con| origenes_en(&con)).unwrap_or_default()
+}
+
+fn origenes_en(con: &Connection) -> rusqlite::Result<HashMap<PathBuf, Origen>> {
+    let mut c = con.prepare("SELECT ruta, pagina, descarga, titulo FROM origenes")?;
+    c.query_map([], |f| {
+        Ok((
+            PathBuf::from(f.get::<_, String>(0)?),
+            Origen { pagina: f.get(1)?, descarga: f.get(2)?, titulo: f.get(3)? },
+        ))
+    })?
+    .collect()
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
@@ -152,6 +234,20 @@ mod pruebas {
         assert!(sincronizar_en(&con, &rutas).is_empty());
         let filas: i64 = con.query_row("SELECT COUNT(*) FROM videos", [], |f| f.get(0)).unwrap();
         assert_eq!(filas, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn origenes_guardados() {
+        let dir = std::env::temp_dir().join(format!("fondos-prueba-origenes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let con = abrir_en(&dir.join("prueba.db")).unwrap();
+        let o = Origen { pagina: "https://x/p/".into(), descarga: Some("https://x/dl".into()), titulo: Some("X".into()) };
+        guardar_origen_en(&con, Path::new("/b/x.mp4"), &o).unwrap();
+        // La segunda vez sustituye a la primera.
+        guardar_origen_en(&con, Path::new("/b/x.mp4"), &o).unwrap();
+        assert_eq!(origenes_en(&con).unwrap(), HashMap::from([(PathBuf::from("/b/x.mp4"), o)]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -10,6 +10,7 @@ mod contexto;
 mod convertir;
 mod descargas;
 mod explorar;
+mod exportar;
 mod fuentes;
 mod gestor;
 mod importar;
@@ -73,15 +74,13 @@ fn construir(app: &adw::Application) {
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    let avisos = adw::ToastOverlay::new();
     let ventana = adw::ApplicationWindow::builder()
         .application(app)
         .title("Fondos animados")
         .default_width(1120)
         .default_height(780)
-        .content(&avisos)
         .build();
-    let ctx = contexto::Contexto::new(ajustes.clone(), ventana.clone(), avisos.clone());
+    let ctx = contexto::Contexto::new(ajustes.clone(), ventana.clone());
     ctx.detectar_capacidades(false);
 
     let descargas = descargas::Descargas::new(ctx.clone());
@@ -136,10 +135,23 @@ fn construir(app: &adw::Application) {
     vista.add_top_bar(&aviso_version);
     actualizar::preparar(&ctx, &aviso_version);
     vista.set_content(Some(&pilas));
-    avisos.set_child(Some(&vista));
+    ventana.set_content(Some(&vista));
+
+    exportar::recomponer_al_arrancar(&biblioteca);
 
     // Acciones.
     app.add_action(&ajustes.create_action("app-color-scheme"));
+    // El botón «Usar de fondo» de las notificaciones.
+    {
+        let ctx = ctx.clone();
+        let a = gio::SimpleAction::new("usar-video", Some(glib::VariantTy::STRING));
+        a.connect_activate(move |_, v| {
+            if let Some(ruta) = v.and_then(|v| v.str()) {
+                ctx.usar_video(std::path::Path::new(ruta));
+            }
+        });
+        app.add_action(&a);
+    }
     let accion = |nombre: &str, f: Box<dyn Fn()>| {
         let a = gio::SimpleAction::new(nombre, None);
         a.connect_activate(move |_, _| f());
@@ -203,6 +215,17 @@ fn construir(app: &adw::Application) {
         accion("rehacer-30-todas", Box::new(move || biblioteca.rehacer_versiones_30_todas()));
     }
     {
+        let ctx = ctx.clone();
+        let biblioteca = biblioteca.clone();
+        accion("exportar-lista", Box::new(move || exportar::exportar(&ctx, &biblioteca)));
+    }
+    {
+        let ctx = ctx.clone();
+        let biblioteca = biblioteca.clone();
+        let descargas = descargas.clone();
+        accion("importar-lista", Box::new(move || exportar::importar(&ctx, &biblioteca, &descargas)));
+    }
+    {
         let v = ventana.clone();
         accion(
             "acerca",
@@ -264,6 +287,10 @@ fn menu_principal() -> gtk::MenuButton {
     herramientas.append(Some("Crear versiones de 30 fps de toda la biblioteca"), Some("win.versiones-30-todas"));
     herramientas.append(Some("Rehacer todas las versiones de 30 fps"), Some("win.rehacer-30-todas"));
     menu.append_section(None, &herramientas);
+    let compartir = gio::Menu::new();
+    compartir.append(Some("Exportar la lista de fondos…"), Some("win.exportar-lista"));
+    compartir.append(Some("Importar una lista de fondos…"), Some("win.importar-lista"));
+    menu.append_section(None, &compartir);
     let final_ = gio::Menu::new();
     final_.append(Some("Acerca de Fondos animados"), Some("win.acerca"));
     menu.append_section(None, &final_);
@@ -289,6 +316,14 @@ fn main() -> glib::ExitCode {
     if std::env::args().nth(1).as_deref() == Some("--probar-fuentes") {
         config::activar_depuracion(true);
         probar_fuentes();
+        return glib::ExitCode::SUCCESS;
+    }
+    // Diagnóstico: de qué web salió un vídeo, por su nombre de fichero (sin extensión).
+    if std::env::args().nth(1).as_deref() == Some("--buscar-origen") {
+        config::activar_depuracion(true);
+        for nombre in std::env::args().skip(2) {
+            println!("{nombre}: {:?}", exportar::buscar_origen(&nombre, None));
+        }
         return glib::ExitCode::SUCCESS;
     }
     let app = adw::Application::builder().application_id(config::ID_APP).build();

@@ -303,6 +303,11 @@ impl Biblioteca {
         agrupar(Self::videos_en(&self.ctx.biblioteca()), Self::videos_en(&self.carpeta_30()))
     }
 
+    /// El vídeo principal de cada fondo (el original, o la versión de 30 fps si no lo hay).
+    pub fn principales(&self) -> Vec<PathBuf> {
+        self.fondos().iter().map(|f| f.principal().to_path_buf()).collect()
+    }
+
     /// Todos los vídeos, originales y versiones.
     fn videos(&self) -> Vec<PathBuf> {
         self.fondos().iter().flat_map(Fondo::rutas).collect()
