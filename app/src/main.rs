@@ -32,6 +32,8 @@ const CSS: &str = "
 /* Texto de la etiqueta de fps de la biblioteca (la forma roja se dibuja debajo). */
 .etiqueta-fps { color: white; font-weight: bold; padding: 2px 8px 2px 15px; }
 flowboxchild { border-radius: 14px; padding: 6px; }
+/* Estrella de los favoritos de Explorar, marcada. */
+button.estrella.favorito { color: @yellow_3; }
 flowboxchild.fondo-actual .miniatura { outline: 3px solid @accent_color; outline-offset: -3px; }
 ";
 

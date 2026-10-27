@@ -1,7 +1,8 @@
 //! Base de datos de la biblioteca (SQLite, en ~/.local/share/fondos-animados/biblioteca.db): lo
 //! que se sabe de cada vídeo (fps, resolución, códec…), para no lanzar ffprobe en cada recarga.
 //! Una fila sirve mientras el fichero no cambie de tamaño ni de fecha. Guarda también de dónde
-//! se bajó cada vídeo (tabla «origenes»), para exportar la biblioteca. Todo bloqueante: se llama
+//! se bajó cada vídeo (tabla «origenes»), para exportar la biblioteca, y los favoritos de
+//! Explorar (tabla «favoritos»). Todo bloqueante: se llama
 //! desde gio::spawn_blocking (o desde el gestor de descargas).
 
 use std::collections::{HashMap, HashSet};
@@ -11,6 +12,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::config;
+use crate::fuentes::Resultado;
 use crate::importar::{self, InfoVideo};
 
 fn abrir() -> rusqlite::Result<Connection> {
@@ -41,7 +43,15 @@ fn abrir_en(ruta: &Path) -> rusqlite::Result<Connection> {
             titulo   TEXT
         );
         -- Vídeos sin origen apuntado que ya se buscaron en las webs sin dar con ellos.
-        CREATE TABLE IF NOT EXISTS sin_origen (ruta TEXT PRIMARY KEY);",
+        CREATE TABLE IF NOT EXISTS sin_origen (ruta TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS favoritos (
+            pagina     TEXT PRIMARY KEY,
+            web        TEXT NOT NULL,
+            titulo     TEXT NOT NULL,
+            miniatura  TEXT NOT NULL,
+            resolucion TEXT,
+            anadido    INTEGER NOT NULL
+        );",
     )?;
     Ok(con)
 }
@@ -195,6 +205,40 @@ fn origenes_en(con: &Connection) -> rusqlite::Result<HashMap<PathBuf, Origen>> {
     .collect()
 }
 
+// ── Favoritos de Explorar ──
+
+/// Los favoritos, el último marcado primero: (web de la fuente, resultado).
+pub fn favoritos() -> Vec<(String, Resultado)> {
+    abrir().and_then(|con| favoritos_en(&con)).unwrap_or_default()
+}
+
+fn favoritos_en(con: &Connection) -> rusqlite::Result<Vec<(String, Resultado)>> {
+    let mut c = con.prepare("SELECT web, pagina, titulo, miniatura, resolucion FROM favoritos ORDER BY anadido DESC, rowid DESC")?;
+    c.query_map([], |f| {
+        Ok((f.get(0)?, Resultado { pagina: f.get(1)?, titulo: f.get(2)?, miniatura: f.get(3)?, resolucion: f.get(4)? }))
+    })?
+    .collect()
+}
+
+/// Marca (o desmarca) un resultado de `web` como favorito.
+pub fn poner_favorito(web: &str, r: &Resultado, favorito: bool) -> Result<(), String> {
+    poner_favorito_en(&abrir().map_err(|e| e.to_string())?, web, r, favorito).map_err(|e| e.to_string())
+}
+
+fn poner_favorito_en(con: &Connection, web: &str, r: &Resultado, favorito: bool) -> rusqlite::Result<()> {
+    if favorito {
+        let ahora = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        con.execute(
+            "INSERT OR REPLACE INTO favoritos (pagina, web, titulo, miniatura, resolucion, anadido)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![r.pagina, web, r.titulo, r.miniatura, r.resolucion, ahora],
+        )?;
+    } else {
+        con.execute("DELETE FROM favoritos WHERE pagina = ?1", [&r.pagina])?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod pruebas {
     use super::*;
@@ -248,6 +292,23 @@ mod pruebas {
         // La segunda vez sustituye a la primera.
         guardar_origen_en(&con, Path::new("/b/x.mp4"), &o).unwrap();
         assert_eq!(origenes_en(&con).unwrap(), HashMap::from([(PathBuf::from("/b/x.mp4"), o)]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn favoritos_guardados() {
+        let dir = std::env::temp_dir().join(format!("fondos-prueba-favoritos-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let con = abrir_en(&dir.join("prueba.db")).unwrap();
+        let r = |p: &str| Resultado { titulo: p.into(), pagina: p.into(), miniatura: "m".into(), resolucion: None };
+        poner_favorito_en(&con, "https://a", &r("1"), true).unwrap();
+        poner_favorito_en(&con, "https://b", &r("2"), true).unwrap();
+        poner_favorito_en(&con, "https://b", &r("2"), true).unwrap(); // repetido: no se duplica
+        let paginas = |con: &Connection| favoritos_en(con).unwrap().into_iter().map(|(_, r)| r.pagina).collect::<Vec<_>>();
+        assert_eq!(paginas(&con), ["2", "1"]);
+        poner_favorito_en(&con, "https://a", &r("1"), false).unwrap();
+        assert_eq!(paginas(&con), ["2"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

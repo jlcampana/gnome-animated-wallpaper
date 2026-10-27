@@ -1,8 +1,12 @@
 //! Página «Explorar»: fuente (web), búsqueda, categoría y resolución; resultados por páginas
 //! (botones anterior/siguiente o el número de la página a la que saltar: cada página sustituye a
 //! la anterior, así solo hay en memoria las miniaturas de una). Clic en un resultado: detalle con vista previa y descarga.
+//! Cada miniatura lleva una estrella para marcarla como favorita (bd.rs, tabla «favoritos») y un
+//! botón para descargarla sin abrir el detalle. El botón «Favoritos» enseña los de todas las webs
+//! (la búsqueda los filtra por título).
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -12,12 +16,13 @@ use crate::contexto::{self, Contexto};
 use crate::descargas::Descargas;
 use crate::fuentes::{self, Fuente, Resultado};
 use crate::previa::Previa;
-use crate::{config, red};
+use crate::{bd, config, red};
 
 pub struct Explorar {
     ctx: Rc<Contexto>,
     descargas: Rc<Descargas>,
     pub raiz: gtk::Box,
+    solo_favoritos: gtk::ToggleButton,
     fuente: gtk::DropDown,
     busqueda: gtk::SearchEntry,
     categoria: gtk::DropDown,
@@ -30,9 +35,12 @@ pub struct Explorar {
     anterior: gtk::Button,
     siguiente: gtk::Button,
     numero_pagina: gtk::SpinButton,
+    paginador: gtk::Box,
     pagina: Cell<u32>,
     peticion: Cell<u64>,
-    resultados: RefCell<Vec<Resultado>>,
+    resultados: RefCell<Vec<(Fuente, Resultado)>>,
+    /// Páginas de los favoritos.
+    favoritos: RefCell<HashSet<String>>,
 }
 
 fn fuente_actual(d: &gtk::DropDown) -> Fuente {
@@ -56,6 +64,11 @@ impl Explorar {
         let resolucion = gtk::DropDown::from_strings(&res);
         resolucion.set_tooltip_text(Some("Resolución"));
 
+        let solo_favoritos = gtk::ToggleButton::builder()
+            .child(&adw::ButtonContent::builder().icon_name("starred-symbolic").label("Favoritos").build())
+            .tooltip_text("Ver solo los favoritos (de todas las webs)")
+            .build();
+
         let barra = gtk::Box::builder()
             .spacing(8)
             .margin_top(12)
@@ -63,6 +76,7 @@ impl Explorar {
             .margin_start(12)
             .margin_end(12)
             .build();
+        barra.append(&solo_favoritos);
         barra.append(&fuente);
         barra.append(&busqueda);
         barra.append(&categoria);
@@ -147,6 +161,7 @@ impl Explorar {
             ctx,
             descargas,
             raiz,
+            solo_favoritos,
             fuente,
             busqueda,
             categoria,
@@ -159,9 +174,11 @@ impl Explorar {
             anterior,
             siguiente,
             numero_pagina,
+            paginador,
             pagina: Cell::new(1),
             peticion: Cell::new(0),
             resultados: RefCell::default(),
+            favoritos: RefCell::new(bd::favoritos().into_iter().map(|(_, r)| r.pagina).collect()),
         });
         yo.actualizar_categorias();
 
@@ -177,6 +194,24 @@ impl Explorar {
                 yo.actualizar_categorias();
                 yo.buscar(1);
             }));
+        }
+        {
+            let con = con.clone();
+            yo.solo_favoritos.connect_toggled(move |b| {
+                let favoritos = b.is_active();
+                con(&|yo| {
+                    for w in [yo.fuente.upcast_ref::<gtk::Widget>(), yo.categoria.upcast_ref(), yo.resolucion.upcast_ref()] {
+                        w.set_sensitive(!favoritos);
+                    }
+                    yo.paginador.set_visible(!favoritos);
+                    yo.busqueda.set_placeholder_text(Some(if favoritos {
+                        "Filtrar los favoritos por título"
+                    } else {
+                        "Buscar (en inglés: girl, frieren, rain…)"
+                    }));
+                    yo.buscar(1);
+                })
+            });
         }
         {
             let con = con.clone();
@@ -220,8 +255,8 @@ impl Explorar {
                 let Some(yo) = debil.upgrade() else { return };
                 let i = hijo.index() as usize;
                 let r = yo.resultados.borrow().get(i).cloned();
-                if let Some(r) = r {
-                    yo.detalle(r);
+                if let Some((fuente, r)) = r {
+                    yo.detalle(fuente, r);
                 }
             });
         }
@@ -244,6 +279,12 @@ impl Explorar {
     }
 
     pub fn buscar(self: &Rc<Self>, pagina: u32) {
+        // Al día por si han llegado favoritos de una lista importada.
+        self.favoritos.replace(bd::favoritos().into_iter().map(|(_, r)| r.pagina).collect());
+        if self.solo_favoritos.is_active() {
+            self.mostrar_favoritos();
+            return;
+        }
         let fuente = fuente_actual(&self.fuente);
         let consulta = self.busqueda.text().to_string();
         let categoria = self.categoria.selected() as usize;
@@ -290,12 +331,7 @@ impl Explorar {
                 }
                 Ok(resultados) => {
                     yo.siguiente.set_sensitive(true);
-                    for r in &resultados {
-                        yo.rejilla.append(&tarjeta(r, fuente.web()));
-                    }
-                    yo.resultados.replace(resultados);
-                    yo.desplazable.vadjustment().set_value(0.0);
-                    yo.estado.set_visible_child_name("resultados");
+                    yo.mostrar(resultados.into_iter().map(|r| (fuente, r)).collect());
                 }
                 Err(e) => {
                     yo.pagina_error.set_description(Some(&glib::markup_escape_text(&e)));
@@ -305,6 +341,88 @@ impl Explorar {
         });
     }
 
+    /// Los favoritos de todas las webs (los que casen con la búsqueda), sin páginas.
+    fn mostrar_favoritos(self: &Rc<Self>) {
+        // Que una búsqueda en marcha no los pise al acabar.
+        self.peticion.set(self.peticion.get() + 1);
+        self.vaciar();
+        let filtro = self.busqueda.text().trim().to_lowercase();
+        let lista: Vec<(Fuente, Resultado)> = bd::favoritos()
+            .into_iter()
+            .filter_map(|(web, r)| Some((Fuente::de_web(&web)?, r)))
+            .filter(|(_, r)| filtro.is_empty() || r.titulo.to_lowercase().contains(&filtro))
+            .collect();
+        if lista.is_empty() {
+            self.pagina_vacia.set_description(Some(if filtro.is_empty() {
+                "Marca fondos con la estrella de su miniatura para tenerlos aquí."
+            } else {
+                "Ningún favorito tiene ese título."
+            }));
+            self.estado.set_visible_child_name("vacio");
+            return;
+        }
+        self.mostrar(lista);
+    }
+
+    fn mostrar(self: &Rc<Self>, lista: Vec<(Fuente, Resultado)>) {
+        for (fuente, r) in &lista {
+            self.rejilla.append(&self.tarjeta(*fuente, r));
+        }
+        self.resultados.replace(lista);
+        self.desplazable.vadjustment().set_value(0.0);
+        self.estado.set_visible_child_name("resultados");
+    }
+
+    fn es_favorito(&self, r: &Resultado) -> bool {
+        self.favoritos.borrow().contains(&r.pagina)
+    }
+
+    /// Cambia el favorito y lo guarda; devuelve cómo queda.
+    fn alternar_favorito(&self, fuente: Fuente, r: &Resultado) -> bool {
+        let favorito = !self.es_favorito(r);
+        if let Err(e) = bd::poner_favorito(fuente.web(), r, favorito) {
+            self.ctx.aviso(&format!("No se pudo guardar el favorito: {e}"));
+            return !favorito;
+        }
+        let mut f = self.favoritos.borrow_mut();
+        if favorito {
+            f.insert(r.pagina.clone());
+        } else {
+            f.remove(&r.pagina);
+        }
+        favorito
+    }
+
+    /// Descarga sin abrir el detalle: la opción que tocaría en él (HD o 4K según Ajustes).
+    fn descargar_directo(self: &Rc<Self>, fuente: Fuente, r: Resultado, boton: &gtk::Button) {
+        boton.set_sensitive(false);
+        let boton = boton.downgrade();
+        let yo = self.clone();
+        glib::spawn_future_local(async move {
+            let r2 = r.clone();
+            let det = gio::spawn_blocking(move || fuente.detalle(&r2)).await.unwrap_or_else(|_| Err("fallo interno".into()));
+            if let Some(b) = boton.upgrade() {
+                b.set_sensitive(true);
+            }
+            match det {
+                Ok(det) => match det.descargas.get(yo.opcion_preferida(&det.descargas)) {
+                    Some(x) => yo.descargas.descargar(&r.titulo, &x.url, &r.pagina, false),
+                    None => yo.ctx.aviso(&format!("«{}» no tiene enlace de descarga", r.titulo)),
+                },
+                Err(e) => yo.ctx.aviso(&format!("No se pudo leer la página de «{}»: {e}", r.titulo)),
+            }
+        });
+    }
+
+    /// Qué descarga elegir de entrada: la HD si el ajuste de calidad lo pide (motionbgs).
+    fn opcion_preferida(&self, descargas: &[fuentes::Descarga]) -> usize {
+        if self.ctx.ajustes.string("download-quality") == "hd" {
+            descargas.iter().position(|x| x.etiqueta.starts_with("HD")).unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
     fn vaciar(&self) {
         while let Some(hijo) = self.rejilla.first_child() {
             self.rejilla.remove(&hijo);
@@ -312,8 +430,7 @@ impl Explorar {
         self.resultados.borrow_mut().clear();
     }
 
-    fn detalle(self: &Rc<Self>, r: Resultado) {
-        let fuente = fuente_actual(&self.fuente);
+    fn detalle(self: &Rc<Self>, fuente: Fuente, r: Resultado) {
         let video = gtk::Picture::builder().content_fit(gtk::ContentFit::Cover).height_request(300).build();
         let reproductor: Rc<RefCell<Option<Previa>>> = Rc::default();
         let cerrado = Rc::new(Cell::new(false));
@@ -351,7 +468,23 @@ impl Explorar {
             .icon_name("web-browser-symbolic")
             .tooltip_text("Abrir la página en el navegador integrado")
             .build();
+        let favorito = gtk::ToggleButton::builder()
+            .icon_name("starred-symbolic")
+            .tooltip_text("Favorito")
+            .active(self.es_favorito(&r))
+            .build();
+        {
+            let yo = self.clone();
+            let r = r.clone();
+            favorito.connect_toggled(move |b| {
+                if b.is_active() != yo.es_favorito(&r) {
+                    yo.alternar_favorito(fuente, &r);
+                    yo.refrescar_estrellas();
+                }
+            });
+        }
         let botones = gtk::Box::builder().spacing(8).halign(gtk::Align::End).build();
+        botones.append(&favorito);
         botones.append(&web);
         botones.append(&opciones);
         botones.append(&descargar);
@@ -421,11 +554,7 @@ impl Explorar {
             opciones.set_model(Some(&gtk::StringList::new(&etiquetas)));
             opciones.set_visible(det.descargas.len() > 1);
             // motionbgs: HD o 4K según el ajuste de calidad.
-            if yo.ctx.ajustes.string("download-quality") == "hd" {
-                if let Some(i) = det.descargas.iter().position(|x| x.etiqueta.starts_with("HD")) {
-                    opciones.set_selected(i as u32);
-                }
-            }
+            opciones.set_selected(yo.opcion_preferida(&det.descargas) as u32);
             let descargas = det.descargas.clone();
             let lanzar = {
                 let yo = yo.clone();
@@ -481,36 +610,111 @@ impl Explorar {
     }
 }
 
-fn tarjeta(r: &Resultado, web: &str) -> gtk::FlowBoxChild {
-    let imagen = gtk::Picture::builder()
-        .content_fit(gtk::ContentFit::Cover)
-        .width_request(240)
-        .height_request(135)
-        .css_classes(["card"])
-        .overflow(gtk::Overflow::Hidden)
-        .build();
-    contexto::cargar_miniatura_remota(&imagen, &r.miniatura, web);
-    let encima = gtk::Overlay::builder().child(&imagen).build();
-    if let Some(res) = &r.resolucion {
-        let etiqueta = gtk::Label::builder()
-            .label(res.replace('x', "×"))
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::End)
-            .margin_end(6)
-            .margin_bottom(6)
-            .css_classes(["etiqueta-resolucion", "caption"])
+impl Explorar {
+    fn tarjeta(self: &Rc<Self>, fuente: Fuente, r: &Resultado) -> gtk::FlowBoxChild {
+        let imagen = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
+            .width_request(240)
+            .height_request(135)
+            .css_classes(["card"])
+            .overflow(gtk::Overflow::Hidden)
             .build();
-        encima.add_overlay(&etiqueta);
+        contexto::cargar_miniatura_remota(&imagen, &r.miniatura, fuente.web());
+        let encima = gtk::Overlay::builder().child(&imagen).build();
+        if let Some(res) = &r.resolucion {
+            let etiqueta = gtk::Label::builder()
+                .label(res.replace('x', "×"))
+                .halign(gtk::Align::End)
+                .valign(gtk::Align::End)
+                .margin_end(6)
+                .margin_bottom(6)
+                .css_classes(["etiqueta-resolucion", "caption"])
+                .build();
+            encima.add_overlay(&etiqueta);
+        }
+        let estrella = gtk::Button::builder()
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .margin_end(6)
+            .margin_top(6)
+            .css_classes(["osd", "circular", "estrella"])
+            .build();
+        pintar_estrella(&estrella, self.es_favorito(r));
+        {
+            let yo = Rc::downgrade(self);
+            let r = r.clone();
+            estrella.connect_clicked(move |b| {
+                if let Some(yo) = yo.upgrade() {
+                    pintar_estrella(b, yo.alternar_favorito(fuente, &r));
+                }
+            });
+        }
+        encima.add_overlay(&estrella);
+        let descargar = gtk::Button::builder()
+            .icon_name("folder-download-symbolic")
+            .tooltip_text("Descargar")
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::End)
+            .margin_start(6)
+            .margin_bottom(6)
+            .css_classes(["osd", "circular"])
+            .build();
+        {
+            let yo = Rc::downgrade(self);
+            let r = r.clone();
+            descargar.connect_clicked(move |b| {
+                if let Some(yo) = yo.upgrade() {
+                    yo.descargar_directo(fuente, r.clone(), b);
+                }
+            });
+        }
+        encima.add_overlay(&descargar);
+        let titulo = gtk::Label::builder()
+            .label(&r.titulo)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(24)
+            .tooltip_text(&r.titulo)
+            .build();
+        let caja = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
+        caja.append(&encima);
+        caja.append(&titulo);
+        gtk::FlowBoxChild::builder().child(&caja).build()
     }
-    let titulo = gtk::Label::builder()
-        .label(&r.titulo)
-        .xalign(0.0)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(24)
-        .tooltip_text(&r.titulo)
-        .build();
-    let caja = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
-    caja.append(&encima);
-    caja.append(&titulo);
-    gtk::FlowBoxChild::builder().child(&caja).build()
+
+    /// Las estrellas de la rejilla, al día (tras cambiar un favorito desde el detalle).
+    fn refrescar_estrellas(&self) {
+        let resultados = self.resultados.borrow();
+        let mut i = 0;
+        while let Some(hijo) = self.rejilla.child_at_index(i) {
+            if let (Some((_, r)), Some(b)) = (resultados.get(i as usize), buscar_estrella(hijo.upcast_ref())) {
+                pintar_estrella(&b, self.es_favorito(r));
+            }
+            i += 1;
+        }
+    }
+}
+
+fn pintar_estrella(b: &gtk::Button, favorito: bool) {
+    b.set_icon_name(if favorito { "starred-symbolic" } else { "non-starred-symbolic" });
+    b.set_tooltip_text(Some(if favorito { "Quitar de favoritos" } else { "Añadir a favoritos" }));
+    if favorito {
+        b.add_css_class("favorito");
+    } else {
+        b.remove_css_class("favorito");
+    }
+}
+
+fn buscar_estrella(w: &gtk::Widget) -> Option<gtk::Button> {
+    if w.has_css_class("estrella") {
+        return w.clone().downcast().ok();
+    }
+    let mut hijo = w.first_child();
+    while let Some(h) = hijo {
+        if let Some(b) = buscar_estrella(&h) {
+            return Some(b);
+        }
+        hijo = h.next_sibling();
+    }
+    None
 }

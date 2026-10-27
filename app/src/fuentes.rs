@@ -20,7 +20,7 @@ pub enum Fuente {
     VsThemes,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Resultado {
     pub titulo: String,
     pub pagina: String,
@@ -61,6 +61,11 @@ impl Fuente {
             Fuente::WallpaperWaifu => "https://wallpaperwaifu.com",
             Fuente::VsThemes => "https://vsthemes.org",
         }
+    }
+
+    /// La fuente de esa web (la de Fuente::web), si es una de las nuestras.
+    pub fn de_web(web: &str) -> Option<Fuente> {
+        Fuente::TODAS.into_iter().find(|f| f.web() == web)
     }
 
     /// Se puede buscar y descargar desde la app; si no, va por el navegador integrado.
