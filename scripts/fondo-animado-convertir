@@ -25,6 +25,8 @@
 # El resultado nunca lleva audio. Si la GPU no puede codificar el códec pedido (hay GPU que
 # solo decodifican, como la Radeon RX 6400), se usa la CPU.
 set -euo pipefail
+# Decimales con punto (mawk, el awk de Ubuntu, usa la coma con LC_NUMERIC=es_ES y ffmpeg no la entiende).
+export LC_NUMERIC=C
 
 uso() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
