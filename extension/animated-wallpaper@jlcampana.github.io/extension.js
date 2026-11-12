@@ -152,35 +152,69 @@ class DisposicionFondo extends Clutter.LayoutManager {
     }
 });
 
-const EfectoEsquinas = GObject.registerClass({GTypeName: 'FondosAnimadosEfectoEsquinas'},
-class EfectoEsquinas extends Shell.GLSLEffect {
-    _init(contenido) {
-        super._init();
-        this._contenido = contenido;
-        this._uTamano = this.get_uniform_location('tamano');
-        this._uLimites = this.get_uniform_location('limites');
-        this._uRadio = this.get_uniform_location('radio');
-    }
+// GNOME 51 quitó Shell.GLSLEffect: allí se usa Clutter.ShaderEffect con un Cogl.Snippet
+// (uniformes por nombre); en GNOME 48-50 sigue Shell.GLSLEffect (uniformes por posición).
+const EfectoEsquinas = Shell.GLSLEffect
+    ? GObject.registerClass({GTypeName: 'FondosAnimadosEfectoEsquinas'},
+        class EfectoEsquinas extends Shell.GLSLEffect {
+            _init(contenido) {
+                super._init();
+                this._contenido = contenido;
+                this._uTamano = this.get_uniform_location('tamano');
+                this._uLimites = this.get_uniform_location('limites');
+                this._uRadio = this.get_uniform_location('radio');
+            }
 
-    vfunc_build_pipeline() {
-        this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, DECLARACIONES, CODIGO, false);
-    }
+            vfunc_build_pipeline() {
+                this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, DECLARACIONES, CODIGO, false);
+            }
 
-    vfunc_paint_target(nodo, contexto) {
-        const actor = this.get_actor();
-        const [ancho, alto] = actor.get_size();
-        const limites = this._limites ?? [0, 0, ancho, alto];
-        this.set_uniform_float(this._uTamano, 2, [ancho, alto]);
-        this.set_uniform_float(this._uLimites, 4, limites);
-        this.set_uniform_float(this._uRadio, 1, [this._contenido.rounded_clip_radius]);
-        super.vfunc_paint_target(nodo, contexto);
-    }
+            vfunc_paint_target(nodo, contexto) {
+                const [ancho, alto] = this.get_actor().get_size();
+                const limites = this._limites ?? [0, 0, ancho, alto];
+                this.set_uniform_float(this._uTamano, 2, [ancho, alto]);
+                this.set_uniform_float(this._uLimites, 4, limites);
+                this.set_uniform_float(this._uRadio, 1, [this._contenido.rounded_clip_radius]);
+                super.vfunc_paint_target(nodo, contexto);
+            }
 
-    setLimites(x, y, ancho, alto) {
-        this._limites = [x, y, x + ancho, y + alto];
-        this.queue_repaint();
-    }
-});
+            setLimites(x, y, ancho, alto) {
+                this._limites = [x, y, x + ancho, y + alto];
+                this.queue_repaint();
+            }
+        })
+    : GObject.registerClass({GTypeName: 'FondosAnimadosEfectoEsquinas'},
+        class EfectoEsquinas extends Clutter.ShaderEffect {
+            _init(contenido) {
+                super._init();
+                this._contenido = contenido;
+            }
+
+            vfunc_get_static_snippet() {
+                const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, DECLARACIONES, null);
+                snippet.set_post(CODIGO);
+                return snippet;
+            }
+
+            vfunc_paint_target(nodo, contexto) {
+                const [ancho, alto] = this.get_actor().get_size();
+                const limites = this._limites ?? [0, 0, ancho, alto];
+                // set_uniform_float encola un repintado: solo si algo ha cambiado.
+                const valores = [ancho, alto, ...limites, this._contenido.rounded_clip_radius];
+                if (valores.some((v, i) => v !== this._valores?.[i])) {
+                    this._valores = valores;
+                    this.set_uniform_float('tamano', 2, valores.slice(0, 2));
+                    this.set_uniform_float('limites', 4, valores.slice(2, 6));
+                    this.set_uniform_float('radio', 1, valores.slice(6));
+                }
+                super.vfunc_paint_target(nodo, contexto);
+            }
+
+            setLimites(x, y, ancho, alto) {
+                this._limites = [x, y, x + ancho, y + alto];
+                this.queue_repaint();
+            }
+        });
 
 const BotonFondos = GObject.registerClass(
 class BotonFondos extends QuickMenuToggle {
