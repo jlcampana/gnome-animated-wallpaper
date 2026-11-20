@@ -10,7 +10,8 @@ y un botón en Ajustes rápidos.
   apagada, y añade un menú en Ajustes rápidos para cambiar de fondo o pausarlo.
 - **Reproductor** (`fondos-animados-renderer`, Rust + GStreamer): decodifica con VA-API
   (AMD/Intel) o NVDEC (NVIDIA) y entrega los fotogramas como DMABuf, sin pasar por la CPU. Un
-  solo decodificador para todos los monitores.
+  solo decodificador para todos los monitores. Con GTK ≥ 4.16 el fotograma llega al compositor
+  tal cual (*graphics offload*), sin que GTK lo copie antes; si no se puede, pinta como siempre.
 - **App «Fondos animados»** (Rust, GTK 4 + libadwaita): biblioteca, búsqueda en
   [MotionBGs](https://motionbgs.com), [MoeWalls](https://moewalls.com) y
   [WallpaperWaifu](https://wallpaperwaifu.com) con filtros y paginación, navegador integrado
@@ -212,12 +213,14 @@ final con el principio para que no se note el salto), `-c` códec (`auto`, `av1`
 | Ver la cola de descargas | `sqlite3 ~/.local/share/fondos-animados/descargas.db 'SELECT id, nombre, estado, hecho, total, mensaje FROM trabajos ORDER BY orden'` |
 | Comprobar que las webs siguen funcionando | `fondos-animados --probar-fuentes` (busca en cada web y enseña el enlace de descarga) |
 | Probar el reproductor suelto, en una ventana | `fondos-animados-renderer --monitors 1280x540 --video vídeo.mp4 --debug` |
+| ¿Descarga GTK los fotogramas al compositor? | `GDK_DEBUG=offload fondos-animados-renderer …`: «Attaching GdkDmabufTexture» es que sí; las líneas con 🗙 dicen por qué no |
+| Pintar por el camino clásico (sin *offload*) | `fondos-animados-renderer … --no-offload`, o `GDK_DISABLE=offload` |
 | Hardware de vídeo | `fondo-animado-convertir --capacidades --forzar` |
 | Versiones | `fondos-animados --version`, `fondos-animados-renderer --version` |
 
 Con `--debug`, el reproductor enseña la cadena de GStreamer que ha montado y las *caps* que llegan
-al sink. Si aparece un decodificador `va…dec`/`nv…dec` y `memory:DMABuf`, la decodificación va
-por la GPU sin copias. Por stdin acepta las órdenes `video <ruta>`, `fit cover|contain|fill`,
+al sink, y si usa *graphics offload* o el camino clásico. Si aparece un decodificador
+`va…dec`/`nv…dec` y `memory:DMABuf`, la decodificación va por la GPU sin copias. Por stdin acepta las órdenes `video <ruta>`, `fit cover|contain|fill`,
 `pause`, `play` y `quit` (es como lo controla la extensión).
 
 ## Cómo funciona

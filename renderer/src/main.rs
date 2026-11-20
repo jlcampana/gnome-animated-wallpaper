@@ -6,11 +6,19 @@
 //! el mismo GdkPaintable se muestra en todas las ventanas. Con VA-API los fotogramas viajan como
 //! DMABuf hasta GTK y el compositor, sin pasar por la CPU.
 //!
+//! Si GTK lo permite (GtkGraphicsOffload con fondo negro, GTK >= 4.16), cada Picture va dentro de
+//! un GraphicsOffload: el DMABuf del decodificador se entrega tal cual al compositor en una
+//! subsuperficie, sin que GTK lo copie antes a su propio búfer en cada fotograma. Si no se puede
+//! (GTK más viejo, --no-offload o fotogramas que no son DMABuf), se pinta como siempre: GTK
+//! decide fotograma a fotograma y vuelve solo al camino normal cuando no puede descargarlo.
+//!
 //! Órdenes por stdin, una por línea:
 //!   video <ruta>             cambia de vídeo
 //!   fit cover|contain|fill   cómo se ajusta a la ventana
 //!   pause | play             pausa / reanuda
 //!   quit                     termina
+//!
+//! Opciones: --monitors AxB,..., --video <ruta>, --fit <modo>, --no-offload, --debug
 
 use std::cell::{Cell, RefCell};
 use std::io::BufRead;
@@ -27,6 +35,7 @@ struct Opciones {
     monitores: Vec<(i32, i32)>,
     video: Option<String>,
     ajuste: gtk::ContentFit,
+    offload: bool,
     depurar: bool,
 }
 
@@ -43,6 +52,7 @@ fn leer_opciones() -> Opciones {
         monitores: vec![],
         video: None,
         ajuste: gtk::ContentFit::Cover,
+        offload: true,
         depurar: false,
     };
     let mut args = std::env::args().skip(1);
@@ -61,6 +71,7 @@ fn leer_opciones() -> Opciones {
             }
             "--video" => op.video = args.next(),
             "--fit" => op.ajuste = ajuste_desde(&args.next().unwrap_or_default()),
+            "--no-offload" => op.offload = false,
             "--debug" => op.depurar = true,
             "--version" => {
                 println!("fondos-animados-renderer {}", env!("CARGO_PKG_VERSION"));
@@ -205,6 +216,58 @@ fn describir_pipeline(playbin: &gst::Element) {
     }
 }
 
+/// ¿Se puede usar GtkGraphicsOffload? Hace falta GTK >= 4.16 en tiempo de ejecución: la 4.14
+/// ya lo tiene, pero sin «black-background» las bandas negras de «contain» las tendría que pintar
+/// GTK debajo y la descarga casi nunca se daría. La propiedad se pone por nombre, así el binario
+/// no depende de símbolos de la 4.16 y sigue arrancando con una GTK 4.14.
+fn offload_disponible(op: &Opciones) -> bool {
+    if !op.offload {
+        return false;
+    }
+    if let Some(motivo) = gtk::check_version(4, 16, 0) {
+        if op.depurar {
+            eprintln!("sin GraphicsOffload: {motivo}");
+        }
+        return false;
+    }
+    // Desactivado a mano en GTK (GDK_DISABLE=offload o GDK_DEBUG=no-offload).
+    let desactivado = |var: &str, clave: &str| {
+        std::env::var(var).is_ok_and(|v| v.split([',', ' ']).any(|x| x == clave))
+    };
+    if desactivado("GDK_DISABLE", "offload") || desactivado("GDK_DEBUG", "no-offload") {
+        if op.depurar {
+            eprintln!("sin GraphicsOffload: desactivado por el entorno");
+        }
+        return false;
+    }
+    true
+}
+
+/// Los fotogramas de VA-API son NV12 BT.709, no sRGB: GTK solo los descarga si puede describir
+/// su espacio de color al compositor (wp_color_manager_v1, que Mutter ofrece desde GNOME 48).
+/// En GTK 4.24 eso sigue siendo opcional (GDK_DEBUG=color-mgmt); sin ello rechaza cada fotograma
+/// («No color-management, non-default color state») y pinta por el camino clásico. Se activa
+/// antes de gtk::init; si el compositor no lo ofrece, GTK sigue sin él y no pasa nada.
+fn activar_gestion_color() {
+    let actual = std::env::var("GDK_DEBUG").unwrap_or_default();
+    if actual.split([',', ' ', ':']).any(|x| x == "color-mgmt") {
+        return;
+    }
+    let nuevo = if actual.is_empty() { "color-mgmt".to_owned() } else { format!("{actual},color-mgmt") };
+    // SAFETY: al principio de main, antes de crear ningún hilo.
+    unsafe { std::env::set_var("GDK_DEBUG", nuevo) };
+}
+
+/// El widget que va en la ventana: la imagen sola o dentro de un GraphicsOffload.
+fn envolver(imagen: &gtk::Picture, offload: bool) -> gtk::Widget {
+    if !offload {
+        return imagen.clone().upcast();
+    }
+    let envoltorio = gtk::GraphicsOffload::new(Some(imagen));
+    envoltorio.set_property("black-background", true);
+    envoltorio.upcast()
+}
+
 fn construir(app: &gtk::Application, op: &Rc<Opciones>) -> Option<Rc<Reproductor>> {
     let sink = match gst::ElementFactory::make("gtk4paintablesink").build() {
         Ok(s) => s,
@@ -223,13 +286,30 @@ fn construir(app: &gtk::Application, op: &Rc<Opciones>) -> Option<Rc<Reproductor
     // Solo vídeo: sin audio, subtítulos, desentrelazado ni balance de color por software.
     playbin.set_property_from_str("flags", "video");
 
+    let offload = offload_disponible(op);
+
+    // Con GraphicsOffload, dentro de él solo puede ir el fotograma: un fondo CSS en la imagen
+    // («Too much content») impide la descarga. El negro lo pone «black-background».
     let proveedor = gtk::CssProvider::new();
-    proveedor.load_from_string("window, picture { background: black; }");
+    proveedor.load_from_string(if offload {
+        "window { background: black; } picture { background: none; }"
+    } else {
+        "window, picture { background: black; }"
+    });
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().expect("display"),
         &proveedor,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+    if op.depurar {
+        eprintln!(
+            "GTK {}.{}.{}: {}",
+            gtk::major_version(),
+            gtk::minor_version(),
+            gtk::micro_version(),
+            if offload { "con GraphicsOffload" } else { "sin GraphicsOffload (camino clásico)" }
+        );
+    }
 
     let mut ventanas = vec![];
     let mut imagenes = vec![];
@@ -252,7 +332,7 @@ fn construir(app: &gtk::Application, op: &Rc<Opciones>) -> Option<Rc<Reproductor
             .resizable(true)
             .default_width(ancho)
             .default_height(alto)
-            .child(&imagen)
+            .child(&envolver(&imagen, offload))
             .build();
         ventana.present();
         ventanas.push(ventana.upcast());
@@ -311,6 +391,10 @@ fn escuchar_stdin(rep: Rc<Reproductor>, app: gtk::Application) {
 fn main() -> glib::ExitCode {
     glib::set_prgname(Some("fondos-animados-renderer"));
     glib::set_application_name("Fondos animados (renderizador)");
+    let op = Rc::new(leer_opciones());
+    if op.offload {
+        activar_gestion_color();
+    }
     // GTK antes que GStreamer: al conectarse, libwayland quita WAYLAND_SOCKET del entorno y
     // cierra el socket en exec. Si no, el gst-plugin-scanner que lanza gst::init al rehacer la
     // caché hereda nuestra conexión con mutter, algún plugin la usa y nos quedamos sin ventana
@@ -318,7 +402,6 @@ fn main() -> glib::ExitCode {
     gtk::init().expect("gtk::init");
     gst::init().expect("gst::init");
 
-    let op = Rc::new(leer_opciones());
     let app = gtk::Application::new(None::<&str>, gio::ApplicationFlags::NON_UNIQUE);
     let reproductor: Rc<RefCell<Option<Rc<Reproductor>>>> = Rc::default();
     {
